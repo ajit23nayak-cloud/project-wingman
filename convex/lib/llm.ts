@@ -10,6 +10,6 @@ export function getGeminiModel() {
     throw new Error("GEMINI_API_KEY is not set in the Convex environment");
   }
   const provider = createGoogleGenerativeAI({ apiKey });
-  _model = provider("gemini-2.5-flash");
+  _model = provider("gemini-2.5-flash-lite");
   return _model;
 }
