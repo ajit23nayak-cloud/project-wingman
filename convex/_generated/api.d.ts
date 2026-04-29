@@ -14,6 +14,7 @@ import type * as lib_clerkBackend from "../lib/clerkBackend.js";
 import type * as lib_gmail from "../lib/gmail.js";
 import type * as lib_llm from "../lib/llm.js";
 import type * as llm from "../llm.js";
+import type * as prompts_classify from "../prompts/classify.js";
 import type * as users from "../users.js";
 
 import type {
@@ -29,6 +30,7 @@ declare const fullApi: ApiFromModules<{
   "lib/gmail": typeof lib_gmail;
   "lib/llm": typeof lib_llm;
   llm: typeof llm;
+  "prompts/classify": typeof prompts_classify;
   users: typeof users;
 }>;
 

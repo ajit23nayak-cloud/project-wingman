@@ -4,6 +4,25 @@ import { useEffect, useRef, useState } from "react";
 import { useUser, UserButton } from "@clerk/nextjs";
 import { useAction, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import { Doc } from "../../../convex/_generated/dataModel";
+
+type FilterValue = "all" | "urgent" | "important" | "fyi" | "archive";
+
+const FILTERS: { value: FilterValue; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "urgent", label: "Urgent" },
+  { value: "important", label: "Important" },
+  { value: "fyi", label: "FYI" },
+  { value: "archive", label: "Archive" },
+];
+
+const BADGE_STYLES: Record<NonNullable<Doc<"emails">["classification"]>, string> =
+  {
+    urgent: "bg-red-100 text-red-800 border-red-200",
+    important: "bg-blue-100 text-blue-800 border-blue-200",
+    fyi: "bg-gray-100 text-gray-600 border-gray-200",
+    archive: "bg-gray-50 text-gray-400 border-gray-200",
+  };
 
 function formatRelativeTime(timestamp: number | undefined): string {
   if (!timestamp) return "never";
@@ -37,23 +56,33 @@ const ERROR_MESSAGES: Record<string, string> = {
   not_authenticated: "You need to sign in.",
   no_google_token:
     "Gmail access not connected. Please sign out and sign in again with Gmail permissions.",
-  token_fetch_failed: "Could not refresh your Google token. Try signing in again.",
-  gmail_fetch_failed: "Gmail is temporarily unavailable. Please try refreshing.",
+  token_fetch_failed:
+    "Could not refresh your Google token. Try signing in again.",
+  gmail_fetch_failed:
+    "Gmail is temporarily unavailable. Please try refreshing.",
 };
 
 export function DashboardView() {
   const { user: clerkUser } = useUser();
   const convexUser = useQuery(api.users.currentUser);
-  const emails = useQuery(api.inbox.listRecent, { limit: 20 });
   const totalCount = useQuery(api.inbox.countForUser);
   const ingestEmails = useAction(api.emails.ingestEmails);
   const testGemini = useAction(api.llm.testGemini);
+  const classifyAllPending = useAction(api.inbox.classifyAllPending);
+
+  const [filter, setFilter] = useState<FilterValue>("all");
+  const emails = useQuery(api.inbox.listRecent, {
+    limit: filter === "all" ? 20 : 200,
+    classification: filter,
+  });
 
   const [isIngesting, setIsIngesting] = useState(false);
   const [firstIngestCount, setFirstIngestCount] = useState<number | null>(null);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [aiTestResult, setAiTestResult] = useState<string | null>(null);
   const [aiTesting, setAiTesting] = useState(false);
+  const [isClassifying, setIsClassifying] = useState(false);
+  const [classifySummary, setClassifySummary] = useState<string | null>(null);
   const autoTriggeredRef = useRef(false);
 
   const runIngest = async (isAuto: boolean) => {
@@ -68,7 +97,9 @@ export function DashboardView() {
       }
     } catch (err) {
       setIngestError(
-        err instanceof Error ? err.message : "Unexpected error during ingestion.",
+        err instanceof Error
+          ? err.message
+          : "Unexpected error during ingestion.",
       );
     } finally {
       setIsIngesting(false);
@@ -100,7 +131,28 @@ export function DashboardView() {
     }
   };
 
+  const runClassifyAll = async () => {
+    setIsClassifying(true);
+    setClassifySummary(null);
+    try {
+      const res = await classifyAllPending();
+      setClassifySummary(
+        `Classified ${res.classified}/${res.total}` +
+          (res.failed ? `, ${res.failed} failed` : "") +
+          ` · ${res.estimatedCostInr} · ${res.inputTokens + res.outputTokens} tokens`,
+      );
+    } catch (err) {
+      setClassifySummary(
+        err instanceof Error ? `Error: ${err.message}` : "Unexpected error.",
+      );
+    } finally {
+      setIsClassifying(false);
+    }
+  };
+
   const firstName = clerkUser?.firstName ?? clerkUser?.fullName ?? "there";
+  const progress = convexUser?.classificationProgress;
+  const liveClassifying = isClassifying || !!progress;
 
   return (
     <main className="min-h-screen p-6">
@@ -171,34 +223,88 @@ export function DashboardView() {
       </section>
 
       <section className="max-w-4xl mx-auto mt-10">
-        <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
-          Recent emails
-        </h3>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            {FILTERS.map((f) => (
+              <button
+                key={f.value}
+                onClick={() => setFilter(f.value)}
+                className={`text-xs px-2.5 py-1 rounded-full border transition ${
+                  filter === f.value
+                    ? "bg-black text-white border-black"
+                    : "bg-white text-gray-600 border-gray-300 hover:border-gray-500"
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            {progress && progress.totalToProcess > 0 && (
+              <span className="text-xs text-gray-600">
+                Classifying {progress.processed}/{progress.totalToProcess}...
+              </span>
+            )}
+            {classifySummary && !liveClassifying && (
+              <span className="text-xs text-gray-600">{classifySummary}</span>
+            )}
+            <button
+              onClick={runClassifyAll}
+              disabled={liveClassifying}
+              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+            >
+              {liveClassifying ? "Classifying..." : "Classify all"}
+            </button>
+          </div>
+        </div>
+
         {emails === undefined ? (
           <p className="text-gray-500 text-sm">Loading...</p>
         ) : emails.length === 0 ? (
-          <p className="text-gray-500 text-sm">No emails yet.</p>
+          <p className="text-gray-500 text-sm">No emails in this view.</p>
         ) : (
           <ul className="divide-y divide-gray-200 border-y border-gray-200">
-            {emails.map((email) => (
-              <li key={email._id} className="py-3">
-                <div className="flex justify-between items-baseline gap-3">
-                  <span className="font-medium text-sm truncate flex-1">
-                    {email.fromAddress}
-                  </span>
-                  <span className="text-xs text-gray-500 shrink-0">
-                    {formatEmailTime(email.receivedAt)}
-                  </span>
-                </div>
-                <div className="text-sm font-medium mt-0.5 truncate">
-                  {email.subject || "(no subject)"}
-                </div>
-                <div className="text-sm text-gray-600 mt-0.5 line-clamp-1">
-                  {email.snippet.slice(0, 100)}
-                  {email.snippet.length > 100 ? "..." : ""}
-                </div>
-              </li>
-            ))}
+            {emails.map((email) => {
+              const isArchive = email.classification === "archive";
+              return (
+                <li
+                  key={email._id}
+                  className={`py-3 ${isArchive ? "opacity-60" : ""}`}
+                >
+                  <div className="flex justify-between items-baseline gap-3">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      {email.classification && (
+                        <span
+                          className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 ${
+                            BADGE_STYLES[email.classification]
+                          }`}
+                        >
+                          {email.classification}
+                        </span>
+                      )}
+                      <span className="font-medium text-sm truncate">
+                        {email.fromAddress}
+                      </span>
+                    </div>
+                    <span className="text-xs text-gray-500 shrink-0">
+                      {formatEmailTime(email.receivedAt)}
+                    </span>
+                  </div>
+                  <div className="text-sm font-medium mt-0.5 truncate">
+                    {email.subject || "(no subject)"}
+                  </div>
+                  <div className="text-sm text-gray-600 mt-0.5 line-clamp-1">
+                    {email.snippet.slice(0, 100)}
+                    {email.snippet.length > 100 ? "..." : ""}
+                  </div>
+                  {email.classificationReason && (
+                    <div className="text-xs text-gray-500 mt-1 italic">
+                      {email.classificationReason}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

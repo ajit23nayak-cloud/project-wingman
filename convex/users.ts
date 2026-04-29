@@ -1,5 +1,10 @@
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
 
 export const currentUser = query({
@@ -60,5 +65,36 @@ export const updateLastIngested = internalMutation({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.userId, { lastIngestedAt: Date.now() });
+  },
+});
+
+export const getByClerkIdInternal = internalQuery({
+  args: { clerkUserId: v.string() },
+  handler: async (ctx, args): Promise<Doc<"users"> | null> => {
+    return await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) =>
+        q.eq("clerkUserId", args.clerkUserId),
+      )
+      .first();
+  },
+});
+
+export const setClassificationProgress = internalMutation({
+  args: {
+    userId: v.id("users"),
+    progress: v.union(
+      v.object({
+        totalToProcess: v.number(),
+        processed: v.number(),
+        startedAt: v.number(),
+      }),
+      v.null(),
+    ),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, {
+      classificationProgress: args.progress ?? undefined,
+    });
   },
 });

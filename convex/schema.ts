@@ -12,6 +12,13 @@ export default defineSchema({
     paidTier: v.boolean(),
     paidTierExpiresAt: v.optional(v.number()),
     lastIngestedAt: v.optional(v.number()),
+    classificationProgress: v.optional(
+      v.object({
+        totalToProcess: v.number(),
+        processed: v.number(),
+        startedAt: v.number(),
+      }),
+    ),
   }).index("by_clerkUserId", ["clerkUserId"]),
 
   emails: defineTable({
@@ -31,6 +38,7 @@ export default defineSchema({
       v.null(),
     ),
     classificationReason: v.optional(v.string()),
+    classifiedAt: v.optional(v.number()),
     draftReply: v.union(v.string(), v.null()),
     draftReplyEditedAt: v.optional(v.number()),
     processedAt: v.optional(v.number()),
@@ -39,7 +47,9 @@ export default defineSchema({
       v.literal("processed"),
       v.literal("failed"),
     ),
-  }).index("by_userId", ["userId"]),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_classification", ["userId", "classification"]),
 
   voiceProfiles: defineTable({
     userId: v.id("users"),
