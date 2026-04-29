@@ -11,6 +11,7 @@ export default defineSchema({
     createdAt: v.number(),
     paidTier: v.boolean(),
     paidTierExpiresAt: v.optional(v.number()),
+    lastIngestedAt: v.optional(v.number()),
   }).index("by_clerkUserId", ["clerkUserId"]),
 
   emails: defineTable({

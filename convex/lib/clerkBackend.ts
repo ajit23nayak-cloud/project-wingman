@@ -1,3 +1,5 @@
+"use node";
+
 import { createClerkClient } from "@clerk/backend";
 
 let _clerk: ReturnType<typeof createClerkClient> | null = null;

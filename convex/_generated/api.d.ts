@@ -8,7 +8,12 @@
  * @module
  */
 
+import type * as emails from "../emails.js";
+import type * as inbox from "../inbox.js";
+import type * as lib_clerkBackend from "../lib/clerkBackend.js";
+import type * as lib_gmail from "../lib/gmail.js";
 import type * as lib_llm from "../lib/llm.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -17,7 +22,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  emails: typeof emails;
+  inbox: typeof inbox;
+  "lib/clerkBackend": typeof lib_clerkBackend;
+  "lib/gmail": typeof lib_gmail;
   "lib/llm": typeof lib_llm;
+  users: typeof users;
 }>;
 
 /**

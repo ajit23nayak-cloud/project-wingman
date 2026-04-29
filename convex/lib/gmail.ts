@@ -1,3 +1,5 @@
+"use node";
+
 import { google, gmail_v1 } from "googleapis";
 
 export type NormalizedEmail = {
