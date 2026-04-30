@@ -80,6 +80,13 @@ export const getByClerkIdInternal = internalQuery({
   },
 });
 
+export const listAllInternal = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<Doc<"users">[]> => {
+    return await ctx.db.query("users").collect();
+  },
+});
+
 export const setClassificationProgress = internalMutation({
   args: {
     userId: v.id("users"),

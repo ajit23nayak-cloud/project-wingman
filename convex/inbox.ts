@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator, PaginationResult } from "convex/server";
 import {
   action,
   internalMutation,
@@ -18,67 +19,119 @@ const classificationFilterValidator = v.union(
   v.literal("archive"),
 );
 
-export const listRecent = query({
+export type EmailListItem = {
+  _id: Id<"emails">;
+  fromAddress: string;
+  subject: string;
+  snippet: string;
+  classification: Doc<"emails">["classification"];
+  classificationReason: string | undefined;
+  receivedAt: number;
+};
+
+const SNIPPET_MAX = 200;
+
+function toListItem(e: Doc<"emails">): EmailListItem {
+  return {
+    _id: e._id,
+    fromAddress: e.fromAddress,
+    subject: e.subject,
+    snippet: (e.snippet ?? "").slice(0, SNIPPET_MAX),
+    classification: e.classification,
+    classificationReason: e.classificationReason,
+    receivedAt: e.receivedAt,
+  };
+}
+
+export const listPaginated = query({
   args: {
-    limit: v.optional(v.number()),
+    paginationOpts: paginationOptsValidator,
     classification: v.optional(classificationFilterValidator),
   },
-  handler: async (ctx, args): Promise<Doc<"emails">[]> => {
+  handler: async (ctx, args): Promise<PaginationResult<EmailListItem>> => {
+    const empty: PaginationResult<EmailListItem> = {
+      page: [],
+      isDone: true,
+      continueCursor: "",
+    };
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
+    if (!identity) return empty;
     const user = await ctx.db
       .query("users")
       .withIndex("by_clerkUserId", (q) =>
         q.eq("clerkUserId", identity.subject),
       )
       .first();
-    if (!user) return [];
-    const limit = args.limit ?? 20;
-    const filter = args.classification ?? "all";
+    if (!user) return empty;
 
-    let emails: Doc<"emails">[];
-    if (filter === "all") {
-      emails = await ctx.db
-        .query("emails")
-        .withIndex("by_userId", (q) => q.eq("userId", user._id))
-        .collect();
-    } else if (filter === "unclassified") {
-      emails = await ctx.db
-        .query("emails")
-        .withIndex("by_userId_classification", (q) =>
-          q.eq("userId", user._id).eq("classification", null),
-        )
-        .collect();
-    } else {
-      emails = await ctx.db
-        .query("emails")
-        .withIndex("by_userId_classification", (q) =>
-          q.eq("userId", user._id).eq("classification", filter),
-        )
-        .collect();
-    }
-    emails.sort((a, b) => b.receivedAt - a.receivedAt);
-    return emails.slice(0, limit);
+    const filter = args.classification ?? "all";
+    const queryBuilder =
+      filter === "all"
+        ? ctx.db
+            .query("emails")
+            .withIndex("by_userId", (q) => q.eq("userId", user._id))
+        : filter === "unclassified"
+          ? ctx.db
+              .query("emails")
+              .withIndex("by_userId_classification", (q) =>
+                q.eq("userId", user._id).eq("classification", null),
+              )
+          : ctx.db
+              .query("emails")
+              .withIndex("by_userId_classification", (q) =>
+                q.eq("userId", user._id).eq("classification", filter),
+              );
+
+    const result = await queryBuilder.order("desc").paginate(args.paginationOpts);
+    return { ...result, page: result.page.map(toListItem) };
   },
 });
 
-export const countForUser = query({
+export type ClassificationCounts = {
+  total: number;
+  unclassified: number;
+  failed: number;
+  urgent: number;
+  important: number;
+  fyi: number;
+  archive: number;
+};
+
+export const getClassificationCounts = query({
   args: {},
-  handler: async (ctx): Promise<number> => {
+  handler: async (ctx): Promise<ClassificationCounts> => {
+    const empty: ClassificationCounts = {
+      total: 0,
+      unclassified: 0,
+      failed: 0,
+      urgent: 0,
+      important: 0,
+      fyi: 0,
+      archive: 0,
+    };
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return 0;
+    if (!identity) return empty;
     const user = await ctx.db
       .query("users")
       .withIndex("by_clerkUserId", (q) =>
         q.eq("clerkUserId", identity.subject),
       )
       .first();
-    if (!user) return 0;
+    if (!user) return empty;
     const emails = await ctx.db
       .query("emails")
       .withIndex("by_userId", (q) => q.eq("userId", user._id))
       .collect();
-    return emails.length;
+    const counts = { ...empty, total: emails.length };
+    for (const e of emails) {
+      if (e.classification === null) {
+        counts.unclassified++;
+      } else {
+        counts[e.classification]++;
+      }
+      if (e.classificationError !== undefined) counts.failed++;
+    }
+    return counts;
   },
 });
 
@@ -120,12 +173,24 @@ export const getEmailByIdInternal = internalQuery({
 export const listPendingForUserInternal = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args): Promise<Doc<"emails">[]> => {
-    return await ctx.db
+    const nulls = await ctx.db
       .query("emails")
       .withIndex("by_userId_classification", (q) =>
         q.eq("userId", args.userId).eq("classification", null),
       )
       .collect();
+    return nulls.filter((e) => e.classificationError === undefined);
+  },
+});
+
+export const listFailedForUserInternal = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args): Promise<Doc<"emails">[]> => {
+    const all = await ctx.db
+      .query("emails")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    return all.filter((e) => e.classificationError !== undefined);
   },
 });
 
@@ -145,13 +210,35 @@ export const applyClassification = internalMutation({
       classification: args.classification,
       classificationReason: args.reason,
       classifiedAt: Date.now(),
+      classificationError: undefined,
     });
+  },
+});
+
+export const markClassificationFailed = internalMutation({
+  args: { emailId: v.id("emails"), error: v.string() },
+  handler: async (ctx, args): Promise<void> => {
+    await ctx.db.patch(args.emailId, { classificationError: args.error });
   },
 });
 
 type ClassifyResult =
   | { classification: "urgent" | "important" | "fyi" | "archive"; reason: string }
   | { error: string };
+
+const GEMINI_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`timeout after ${ms}ms (${label})`)),
+        ms,
+      ),
+    ),
+  ]);
+}
 
 export const classifyEmail = action({
   args: { emailId: v.id("emails") },
@@ -162,11 +249,15 @@ export const classifyEmail = action({
     if (!email) return { error: "email_not_found" };
 
     try {
-      const { result } = await classifyEmailContent({
-        fromAddress: email.fromAddress,
-        subject: email.subject,
-        snippet: email.snippet,
-      });
+      const { result } = await withTimeout(
+        classifyEmailContent({
+          fromAddress: email.fromAddress,
+          subject: email.subject,
+          snippet: email.snippet,
+        }),
+        GEMINI_TIMEOUT_MS,
+        `classifyEmail ${emailId}`,
+      );
       await ctx.runMutation(internal.inbox.applyClassification, {
         emailId,
         classification: result.classification,
@@ -176,6 +267,10 @@ export const classifyEmail = action({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[classifyEmail] failed", { emailId, error: msg });
+      await ctx.runMutation(internal.inbox.markClassificationFailed, {
+        emailId,
+        error: msg,
+      });
       return { error: msg };
     }
   },
@@ -191,26 +286,44 @@ type BatchSummary = {
 };
 
 export const classifyAllPending = action({
-  args: {},
-  handler: async (ctx): Promise<BatchSummary> => {
+  args: {
+    mode: v.optional(v.union(v.literal("pending"), v.literal("failed"))),
+  },
+  handler: async (ctx, args): Promise<BatchSummary> => {
+    const mode = args.mode ?? "pending";
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    let user;
+    if (identity) {
+      user = await ctx.runQuery(internal.users.getByClerkIdInternal, {
+        clerkUserId: identity.subject,
+      });
+      if (!user) throw new Error("User not found");
+    } else {
+      // CLI / admin run (single-user beta): pick the only user.
+      const all = await ctx.runQuery(internal.users.listAllInternal, {});
+      if (all.length !== 1) {
+        throw new Error(
+          `Not authenticated and CLI fallback requires exactly 1 user (found ${all.length})`,
+        );
+      }
+      user = all[0];
+    }
 
-    const user = await ctx.runQuery(internal.users.getByClerkIdInternal, {
-      clerkUserId: identity.subject,
-    });
-    if (!user) throw new Error("User not found");
-
-    const pending = await ctx.runQuery(
-      internal.inbox.listPendingForUserInternal,
-      { userId: user._id },
-    );
-    const total = pending.length;
+    const items =
+      mode === "pending"
+        ? await ctx.runQuery(internal.inbox.listPendingForUserInternal, {
+            userId: user._id,
+          })
+        : await ctx.runQuery(internal.inbox.listFailedForUserInternal, {
+            userId: user._id,
+          });
+    const total = items.length;
     const estimatedCostInr = (total * 0.005).toFixed(2);
     const startedAt = Date.now();
 
     console.log("[classifyAllPending] starting", {
       userId: user._id,
+      mode,
       total,
       estimatedCostInr,
     });
@@ -225,34 +338,48 @@ export const classifyAllPending = action({
     let inputTokens = 0;
     let outputTokens = 0;
 
-    for (let i = 0; i < pending.length; i += 10) {
-      const batch = pending.slice(i, i + 10);
-      const results = await Promise.allSettled(
+    for (let i = 0; i < items.length; i += 10) {
+      const batch = items.slice(i, i + 10);
+      const results = await Promise.all(
         batch.map(async (email) => {
-          const { result, usage } = await classifyEmailContent({
-            fromAddress: email.fromAddress,
-            subject: email.subject,
-            snippet: email.snippet,
-          });
-          await ctx.runMutation(internal.inbox.applyClassification, {
-            emailId: email._id,
-            classification: result.classification,
-            reason: result.reason,
-          });
-          return usage;
+          try {
+            const { result, usage } = await withTimeout(
+              classifyEmailContent({
+                fromAddress: email.fromAddress,
+                subject: email.subject,
+                snippet: email.snippet,
+              }),
+              GEMINI_TIMEOUT_MS,
+              `classify ${email._id}`,
+            );
+            await ctx.runMutation(internal.inbox.applyClassification, {
+              emailId: email._id,
+              classification: result.classification,
+              reason: result.reason,
+            });
+            return { ok: true as const, usage };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error("[classifyAllPending] item failed", {
+              emailId: email._id,
+              error: msg,
+            });
+            await ctx.runMutation(internal.inbox.markClassificationFailed, {
+              emailId: email._id,
+              error: msg,
+            });
+            return { ok: false as const };
+          }
         }),
       );
 
       for (const r of results) {
-        if (r.status === "fulfilled") {
+        if (r.ok) {
           classified++;
-          inputTokens += r.value.inputTokens ?? 0;
-          outputTokens += r.value.outputTokens ?? 0;
+          inputTokens += r.usage.inputTokens ?? 0;
+          outputTokens += r.usage.outputTokens ?? 0;
         } else {
           failed++;
-          console.error("[classifyAllPending] item failed", {
-            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-          });
         }
       }
 
@@ -265,8 +392,8 @@ export const classifyAllPending = action({
         },
       });
 
-      if (i + 10 < pending.length) {
-        await new Promise((r) => setTimeout(r, 1000));
+      if (i + 10 < items.length) {
+        await new Promise((r) => setTimeout(r, 200));
       }
     }
 

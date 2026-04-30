@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useUser, UserButton } from "@clerk/nextjs";
-import { useAction, useQuery } from "convex/react";
+import { useAction, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Doc } from "../../../convex/_generated/dataModel";
+
+const PAGE_SIZE = 50;
 
 type FilterValue = "all" | "urgent" | "important" | "fyi" | "archive";
 
@@ -15,6 +17,17 @@ const FILTERS: { value: FilterValue; label: string }[] = [
   { value: "fyi", label: "FYI" },
   { value: "archive", label: "Archive" },
 ];
+
+function countFor(
+  counts:
+    | { total: number; urgent: number; important: number; fyi: number; archive: number }
+    | undefined,
+  value: FilterValue,
+): number | null {
+  if (!counts) return null;
+  if (value === "all") return counts.total;
+  return counts[value];
+}
 
 const BADGE_STYLES: Record<NonNullable<Doc<"emails">["classification"]>, string> =
   {
@@ -65,23 +78,33 @@ const ERROR_MESSAGES: Record<string, string> = {
 export function DashboardView() {
   const { user: clerkUser } = useUser();
   const convexUser = useQuery(api.users.currentUser);
-  const totalCount = useQuery(api.inbox.countForUser);
+  const counts = useQuery(api.inbox.getClassificationCounts);
+  const totalCount = counts?.total;
   const ingestEmails = useAction(api.emails.ingestEmails);
   const testGemini = useAction(api.llm.testGemini);
   const classifyAllPending = useAction(api.inbox.classifyAllPending);
 
   const [filter, setFilter] = useState<FilterValue>("all");
-  const emails = useQuery(api.inbox.listRecent, {
-    limit: filter === "all" ? 20 : 200,
-    classification: filter,
-  });
+  const [isClassifying, setIsClassifying] = useState(false);
+  const progress = convexUser?.classificationProgress;
+  const liveClassifying = isClassifying || !!progress;
+
+  // Bandwidth rule: drop the list subscription while classifyAllPending is
+  // running. Progress is observed via the small currentUser doc instead.
+  const paginated = usePaginatedQuery(
+    api.inbox.listPaginated,
+    liveClassifying ? "skip" : { classification: filter },
+    { initialNumItems: PAGE_SIZE },
+  );
+  const emails = paginated.results;
+  const listStatus = paginated.status;
+  const loadMore = paginated.loadMore;
 
   const [isIngesting, setIsIngesting] = useState(false);
   const [firstIngestCount, setFirstIngestCount] = useState<number | null>(null);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [aiTestResult, setAiTestResult] = useState<string | null>(null);
   const [aiTesting, setAiTesting] = useState(false);
-  const [isClassifying, setIsClassifying] = useState(false);
   const [classifySummary, setClassifySummary] = useState<string | null>(null);
   const autoTriggeredRef = useRef(false);
 
@@ -131,13 +154,14 @@ export function DashboardView() {
     }
   };
 
-  const runClassifyAll = async () => {
+  const runClassifyAll = async (mode: "pending" | "failed" = "pending") => {
     setIsClassifying(true);
     setClassifySummary(null);
     try {
-      const res = await classifyAllPending();
+      const res = await classifyAllPending({ mode });
+      const label = mode === "failed" ? "Retried" : "Classified";
       setClassifySummary(
-        `Classified ${res.classified}/${res.total}` +
+        `${label} ${res.classified}/${res.total}` +
           (res.failed ? `, ${res.failed} failed` : "") +
           ` · ${res.estimatedCostInr} · ${res.inputTokens + res.outputTokens} tokens`,
       );
@@ -151,8 +175,6 @@ export function DashboardView() {
   };
 
   const firstName = clerkUser?.firstName ?? clerkUser?.fullName ?? "there";
-  const progress = convexUser?.classificationProgress;
-  const liveClassifying = isClassifying || !!progress;
 
   return (
     <main className="min-h-screen p-6">
@@ -225,19 +247,23 @@ export function DashboardView() {
       <section className="max-w-4xl mx-auto mt-10">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
           <div className="flex items-center gap-2 flex-wrap">
-            {FILTERS.map((f) => (
-              <button
-                key={f.value}
-                onClick={() => setFilter(f.value)}
-                className={`text-xs px-2.5 py-1 rounded-full border transition ${
-                  filter === f.value
-                    ? "bg-black text-white border-black"
-                    : "bg-white text-gray-600 border-gray-300 hover:border-gray-500"
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
+            {FILTERS.map((f) => {
+              const c = countFor(counts, f.value);
+              return (
+                <button
+                  key={f.value}
+                  onClick={() => setFilter(f.value)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition ${
+                    filter === f.value
+                      ? "bg-black text-white border-black"
+                      : "bg-white text-gray-600 border-gray-300 hover:border-gray-500"
+                  }`}
+                >
+                  {f.label}
+                  {c !== null ? ` (${c})` : ""}
+                </button>
+              );
+            })}
           </div>
           <div className="flex items-center gap-3">
             {progress && progress.totalToProcess > 0 && (
@@ -249,63 +275,93 @@ export function DashboardView() {
               <span className="text-xs text-gray-600">{classifySummary}</span>
             )}
             <button
-              onClick={runClassifyAll}
+              onClick={() => runClassifyAll("pending")}
               disabled={liveClassifying}
               className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
             >
               {liveClassifying ? "Classifying..." : "Classify all"}
             </button>
+            {counts && counts.failed > 0 && (
+              <button
+                onClick={() => runClassifyAll("failed")}
+                disabled={liveClassifying}
+                className="rounded-md border border-amber-400 bg-amber-50 text-amber-900 px-3 py-1.5 text-sm font-medium hover:bg-amber-100 disabled:opacity-50"
+              >
+                Retry failed ({counts.failed})
+              </button>
+            )}
           </div>
         </div>
 
-        {emails === undefined ? (
+        {liveClassifying ? (
+          <p className="text-gray-500 text-sm">
+            Classifying in progress — list paused to save bandwidth. It will
+            re-load when classification finishes.
+          </p>
+        ) : listStatus === "LoadingFirstPage" ? (
           <p className="text-gray-500 text-sm">Loading...</p>
         ) : emails.length === 0 ? (
           <p className="text-gray-500 text-sm">No emails in this view.</p>
         ) : (
-          <ul className="divide-y divide-gray-200 border-y border-gray-200">
-            {emails.map((email) => {
-              const isArchive = email.classification === "archive";
-              return (
-                <li
-                  key={email._id}
-                  className={`py-3 ${isArchive ? "opacity-60" : ""}`}
-                >
-                  <div className="flex justify-between items-baseline gap-3">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      {email.classification && (
-                        <span
-                          className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 ${
-                            BADGE_STYLES[email.classification]
-                          }`}
-                        >
-                          {email.classification}
+          <>
+            <ul className="divide-y divide-gray-200 border-y border-gray-200">
+              {emails.map((email) => {
+                const isArchive = email.classification === "archive";
+                return (
+                  <li
+                    key={email._id}
+                    className={`py-3 ${isArchive ? "opacity-60" : ""}`}
+                  >
+                    <div className="flex justify-between items-baseline gap-3">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        {email.classification && (
+                          <span
+                            className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 ${
+                              BADGE_STYLES[email.classification]
+                            }`}
+                          >
+                            {email.classification}
+                          </span>
+                        )}
+                        <span className="font-medium text-sm truncate">
+                          {email.fromAddress}
                         </span>
-                      )}
-                      <span className="font-medium text-sm truncate">
-                        {email.fromAddress}
+                      </div>
+                      <span className="text-xs text-gray-500 shrink-0">
+                        {formatEmailTime(email.receivedAt)}
                       </span>
                     </div>
-                    <span className="text-xs text-gray-500 shrink-0">
-                      {formatEmailTime(email.receivedAt)}
-                    </span>
-                  </div>
-                  <div className="text-sm font-medium mt-0.5 truncate">
-                    {email.subject || "(no subject)"}
-                  </div>
-                  <div className="text-sm text-gray-600 mt-0.5 line-clamp-1">
-                    {email.snippet.slice(0, 100)}
-                    {email.snippet.length > 100 ? "..." : ""}
-                  </div>
-                  {email.classificationReason && (
-                    <div className="text-xs text-gray-500 mt-1 italic">
-                      {email.classificationReason}
+                    <div className="text-sm font-medium mt-0.5 truncate">
+                      {email.subject || "(no subject)"}
                     </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+                    <div className="text-sm text-gray-600 mt-0.5 line-clamp-1">
+                      {email.snippet}
+                    </div>
+                    {email.classificationReason && (
+                      <div className="text-xs text-gray-500 mt-1 italic">
+                        {email.classificationReason}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            {listStatus === "CanLoadMore" && (
+              <div className="mt-3 flex justify-center">
+                <button
+                  onClick={() => loadMore(PAGE_SIZE)}
+                  className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+                >
+                  Load more
+                </button>
+              </div>
+            )}
+            {listStatus === "LoadingMore" && (
+              <p className="mt-3 text-center text-xs text-gray-500">
+                Loading more...
+              </p>
+            )}
+          </>
         )}
       </section>
     </main>

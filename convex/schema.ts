@@ -38,6 +38,7 @@ export default defineSchema({
       v.null(),
     ),
     classificationReason: v.optional(v.string()),
+    classificationError: v.optional(v.string()),
     classifiedAt: v.optional(v.number()),
     draftReply: v.union(v.string(), v.null()),
     draftReplyEditedAt: v.optional(v.number()),
