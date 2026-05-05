@@ -17,6 +17,18 @@ export default defineSchema({
         totalToProcess: v.number(),
         processed: v.number(),
         startedAt: v.number(),
+        // Set when the final chunk lands. Absent while chunks are still
+        // queued. Combined with a 30-min stale check on the client, this is
+        // how the dashboard distinguishes "still running" from "abandoned".
+        completedAt: v.optional(v.number()),
+        // Running totals, incremented by classifyChunk after each chunk so
+        // the UI/CLI can read a final summary off this doc once completedAt
+        // is set. No need to surface them mid-run.
+        classified: v.number(),
+        failed: v.number(),
+        inputTokens: v.number(),
+        outputTokens: v.number(),
+        mode: v.union(v.literal("pending"), v.literal("failed")),
       }),
     ),
   }).index("by_clerkUserId", ["clerkUserId"]),

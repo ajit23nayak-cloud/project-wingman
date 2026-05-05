@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator, PaginationResult } from "convex/server";
 import {
   action,
+  internalAction,
   internalMutation,
   internalQuery,
   query,
@@ -276,20 +277,30 @@ export const classifyEmail = action({
   },
 });
 
-type BatchSummary = {
+// Each chunk fits comfortably in Convex's 600s action ceiling: 50 emails
+// processed in inner-batches of 10 (parallel) with a 30s per-call timeout
+// = ~150s worst case, typically 30-90s.
+const CHUNK_SIZE = 50;
+// Inner concurrency within a chunk — 10 LLM calls in flight at once. The
+// 200ms gap between inner batches is intentional rate-limit slack.
+const INNER_BATCH = 10;
+
+export type ClassifyEntrypointResult = {
+  mode: "pending" | "failed";
   total: number;
-  classified: number;
-  failed: number;
-  inputTokens: number;
-  outputTokens: number;
-  estimatedCostInr: string;
+  scheduled: boolean;
+  message: string;
 };
 
 export const classifyAllPending = action({
   args: {
     mode: v.optional(v.union(v.literal("pending"), v.literal("failed"))),
+    // Caps total emails processed in this invocation. Unlimited if absent.
+    // Use for sanity-checking after rate-limit recovery, throttling daily
+    // burn, or capping cost per click.
+    limit: v.optional(v.number()),
   },
-  handler: async (ctx, args): Promise<BatchSummary> => {
+  handler: async (ctx, args): Promise<ClassifyEntrypointResult> => {
     const mode = args.mode ?? "pending";
     const identity = await ctx.auth.getUserIdentity();
     let user;
@@ -317,31 +328,77 @@ export const classifyAllPending = action({
         : await ctx.runQuery(internal.inbox.listFailedForUserInternal, {
             userId: user._id,
           });
-    const total = items.length;
-    const estimatedCostInr = (total * 0.005).toFixed(2);
-    const startedAt = Date.now();
+    const cap =
+      args.limit !== undefined
+        ? Math.min(items.length, args.limit)
+        : items.length;
+    const emailIds = items.slice(0, cap).map((e) => e._id);
+    const total = emailIds.length;
 
-    console.log("[classifyAllPending] starting", {
+    if (total === 0) {
+      return {
+        mode,
+        total: 0,
+        scheduled: false,
+        message: `Nothing to classify in mode="${mode}"`,
+      };
+    }
+
+    const startedAt = Date.now();
+    const estimatedCostInr = (total * 0.005).toFixed(2);
+    console.log("[classifyAllPending] scheduling", {
       userId: user._id,
       mode,
       total,
+      chunkSize: CHUNK_SIZE,
       estimatedCostInr,
     });
 
-    await ctx.runMutation(internal.users.setClassificationProgress, {
+    await ctx.runMutation(internal.users.initClassificationProgress, {
       userId: user._id,
-      progress: { totalToProcess: total, processed: 0, startedAt },
+      totalToProcess: total,
+      startedAt,
+      mode,
     });
 
+    // Schedule chunk 0. Each chunk schedules the next, until offset >= total.
+    await ctx.scheduler.runAfter(0, internal.inbox.classifyChunk, {
+      userId: user._id,
+      emailIds,
+      offset: 0,
+    });
+
+    return {
+      mode,
+      total,
+      scheduled: true,
+      message: `Scheduled ${total} emails in chunks of ${CHUNK_SIZE} (~₹${estimatedCostInr})`,
+    };
+  },
+});
+
+export const classifyChunk = internalAction({
+  args: {
+    userId: v.id("users"),
+    emailIds: v.array(v.id("emails")),
+    offset: v.number(),
+  },
+  handler: async (ctx, { userId, emailIds, offset }): Promise<void> => {
+    const slice = emailIds.slice(offset, offset + CHUNK_SIZE);
     let classified = 0;
     let failed = 0;
     let inputTokens = 0;
     let outputTokens = 0;
 
-    for (let i = 0; i < items.length; i += 10) {
-      const batch = items.slice(i, i + 10);
+    for (let i = 0; i < slice.length; i += INNER_BATCH) {
+      const inner = slice.slice(i, i + INNER_BATCH);
       const results = await Promise.all(
-        batch.map(async (email) => {
+        inner.map(async (emailId) => {
+          const email = await ctx.runQuery(
+            internal.inbox.getEmailByIdInternal,
+            { emailId },
+          );
+          if (!email) return { ok: false as const };
           try {
             const { result, usage } = await withTimeout(
               classifyEmailContent({
@@ -350,22 +407,19 @@ export const classifyAllPending = action({
                 snippet: email.snippet,
               }),
               GEMINI_TIMEOUT_MS,
-              `classify ${email._id}`,
+              `classify ${emailId}`,
             );
             await ctx.runMutation(internal.inbox.applyClassification, {
-              emailId: email._id,
+              emailId,
               classification: result.classification,
               reason: result.reason,
             });
             return { ok: true as const, usage };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            console.error("[classifyAllPending] item failed", {
-              emailId: email._id,
-              error: msg,
-            });
+            console.error("[classifyChunk] item failed", { emailId, error: msg });
             await ctx.runMutation(internal.inbox.markClassificationFailed, {
-              emailId: email._id,
+              emailId,
               error: msg,
             });
             return { ok: false as const };
@@ -383,34 +437,35 @@ export const classifyAllPending = action({
         }
       }
 
-      await ctx.runMutation(internal.users.setClassificationProgress, {
-        userId: user._id,
-        progress: {
-          totalToProcess: total,
-          processed: classified + failed,
-          startedAt,
-        },
-      });
-
-      if (i + 10 < items.length) {
+      if (i + INNER_BATCH < slice.length) {
         await new Promise((r) => setTimeout(r, 200));
       }
     }
 
-    await ctx.runMutation(internal.users.setClassificationProgress, {
-      userId: user._id,
-      progress: null,
+    await ctx.runMutation(internal.users.applyChunkResult, {
+      userId,
+      deltaProcessed: slice.length,
+      deltaClassified: classified,
+      deltaFailed: failed,
+      deltaInputTokens: inputTokens,
+      deltaOutputTokens: outputTokens,
     });
 
-    const summary: BatchSummary = {
-      total,
-      classified,
-      failed,
-      inputTokens,
-      outputTokens,
-      estimatedCostInr: `~₹${estimatedCostInr}`,
-    };
-    console.log("[classifyAllPending] complete", summary);
-    return summary;
+    const nextOffset = offset + CHUNK_SIZE;
+    if (nextOffset < emailIds.length) {
+      await ctx.scheduler.runAfter(0, internal.inbox.classifyChunk, {
+        userId,
+        emailIds,
+        offset: nextOffset,
+      });
+    } else {
+      await ctx.runMutation(internal.users.markClassificationComplete, {
+        userId,
+      });
+      console.log("[classifyChunk] run complete", {
+        userId,
+        total: emailIds.length,
+      });
+    }
   },
 });

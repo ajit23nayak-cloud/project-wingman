@@ -87,7 +87,14 @@ export function DashboardView() {
   const [filter, setFilter] = useState<FilterValue>("all");
   const [isClassifying, setIsClassifying] = useState(false);
   const progress = convexUser?.classificationProgress;
-  const liveClassifying = isClassifying || !!progress;
+  // A progress doc whose startedAt is older than this with no completedAt is
+  // assumed to be from a crashed/hung run, not an active one.
+  const STALE_PROGRESS_MS = 30 * 60 * 1000;
+  const isProgressActive =
+    !!progress &&
+    progress.completedAt === undefined &&
+    Date.now() - progress.startedAt < STALE_PROGRESS_MS;
+  const liveClassifying = isClassifying || isProgressActive;
 
   // Bandwidth rule: drop the list subscription while classifyAllPending is
   // running. Progress is observed via the small currentUser doc instead.
@@ -155,16 +162,16 @@ export function DashboardView() {
   };
 
   const runClassifyAll = async (mode: "pending" | "failed" = "pending") => {
+    // The action no longer waits for completion — it lists work, schedules
+    // chunk 0, and returns. Final totals come from the progress doc once
+    // completedAt is set (see useEffect below).
     setIsClassifying(true);
     setClassifySummary(null);
     try {
       const res = await classifyAllPending({ mode });
-      const label = mode === "failed" ? "Retried" : "Classified";
-      setClassifySummary(
-        `${label} ${res.classified}/${res.total}` +
-          (res.failed ? `, ${res.failed} failed` : "") +
-          ` · ${res.estimatedCostInr} · ${res.inputTokens + res.outputTokens} tokens`,
-      );
+      if (!res.scheduled) {
+        setClassifySummary(res.message);
+      }
     } catch (err) {
       setClassifySummary(
         err instanceof Error ? `Error: ${err.message}` : "Unexpected error.",
@@ -173,6 +180,24 @@ export function DashboardView() {
       setIsClassifying(false);
     }
   };
+
+  // When a classification run finishes (completedAt stamped), compute and
+  // display the final summary string from the progress doc fields.
+  const lastSummaryKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!progress || progress.completedAt === undefined) return;
+    const key = `${progress.startedAt}-${progress.completedAt}`;
+    if (lastSummaryKeyRef.current === key) return;
+    lastSummaryKeyRef.current = key;
+    const label = progress.mode === "failed" ? "Retried" : "Classified";
+    const tokens = progress.inputTokens + progress.outputTokens;
+    const costInr = (progress.totalToProcess * 0.005).toFixed(2);
+    setClassifySummary(
+      `${label} ${progress.classified}/${progress.totalToProcess}` +
+        (progress.failed ? `, ${progress.failed} failed` : "") +
+        ` · ~₹${costInr} · ${tokens} tokens`,
+    );
+  }, [progress]);
 
   const firstName = clerkUser?.firstName ?? clerkUser?.fullName ?? "there";
 
@@ -266,7 +291,7 @@ export function DashboardView() {
             })}
           </div>
           <div className="flex items-center gap-3">
-            {progress && progress.totalToProcess > 0 && (
+            {isProgressActive && progress && progress.totalToProcess > 0 && (
               <span className="text-xs text-gray-600">
                 Classifying {progress.processed}/{progress.totalToProcess}...
               </span>

@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as admin from "../admin.js";
 import type * as emails from "../emails.js";
 import type * as inbox from "../inbox.js";
 import type * as lib_clerkBackend from "../lib/clerkBackend.js";
@@ -24,6 +25,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  admin: typeof admin;
   emails: typeof emails;
   inbox: typeof inbox;
   "lib/clerkBackend": typeof lib_clerkBackend;

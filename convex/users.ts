@@ -87,21 +87,71 @@ export const listAllInternal = internalQuery({
   },
 });
 
-export const setClassificationProgress = internalMutation({
+// Overwrites the progress doc with a fresh run. Called once by the
+// classifyAllPending entrypoint before chunk 0 is scheduled.
+export const initClassificationProgress = internalMutation({
   args: {
     userId: v.id("users"),
-    progress: v.union(
-      v.object({
-        totalToProcess: v.number(),
-        processed: v.number(),
-        startedAt: v.number(),
-      }),
-      v.null(),
-    ),
+    totalToProcess: v.number(),
+    startedAt: v.number(),
+    mode: v.union(v.literal("pending"), v.literal("failed")),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.userId, {
-      classificationProgress: args.progress ?? undefined,
+      classificationProgress: {
+        totalToProcess: args.totalToProcess,
+        processed: 0,
+        startedAt: args.startedAt,
+        classified: 0,
+        failed: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        mode: args.mode,
+      },
+    });
+  },
+});
+
+// Atomic increment of running totals after a chunk completes. Uses
+// patch-after-read so two concurrent chunks (shouldn't happen, but defensive)
+// don't clobber each other's counters within a single mutation transaction.
+export const applyChunkResult = internalMutation({
+  args: {
+    userId: v.id("users"),
+    deltaProcessed: v.number(),
+    deltaClassified: v.number(),
+    deltaFailed: v.number(),
+    deltaInputTokens: v.number(),
+    deltaOutputTokens: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user || !user.classificationProgress) return;
+    const p = user.classificationProgress;
+    await ctx.db.patch(args.userId, {
+      classificationProgress: {
+        ...p,
+        processed: p.processed + args.deltaProcessed,
+        classified: p.classified + args.deltaClassified,
+        failed: p.failed + args.deltaFailed,
+        inputTokens: p.inputTokens + args.deltaInputTokens,
+        outputTokens: p.outputTokens + args.deltaOutputTokens,
+      },
+    });
+  },
+});
+
+// Stamps completedAt on the existing progress doc. Called by the last chunk.
+export const markClassificationComplete = internalMutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user || !user.classificationProgress) return;
+    await ctx.db.patch(args.userId, {
+      classificationProgress: {
+        ...user.classificationProgress,
+        completedAt: Date.now(),
+      },
     });
   },
 });
