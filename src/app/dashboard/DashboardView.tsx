@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useUser, UserButton } from "@clerk/nextjs";
 import { useAction, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
@@ -332,41 +333,54 @@ export function DashboardView() {
             <ul className="divide-y divide-gray-200 border-y border-gray-200">
               {emails.map((email) => {
                 const isArchive = email.classification === "archive";
+                const isSent = email.replyStatus === "sent";
+                const fade = isArchive || isSent;
                 return (
-                  <li
-                    key={email._id}
-                    className={`py-3 ${isArchive ? "opacity-60" : ""}`}
-                  >
-                    <div className="flex justify-between items-baseline gap-3">
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        {email.classification && (
-                          <span
-                            className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 ${
-                              BADGE_STYLES[email.classification]
-                            }`}
-                          >
-                            {email.classification}
+                  <li key={email._id}>
+                    <Link
+                      href={`/email/${email._id}`}
+                      className={`block py-3 px-2 -mx-2 hover:bg-gray-50 ${fade ? "opacity-60" : ""}`}
+                    >
+                      <div className="flex justify-between items-baseline gap-3">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          {email.classification && (
+                            <span
+                              className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 ${
+                                BADGE_STYLES[email.classification]
+                              }`}
+                            >
+                              {email.classification}
+                            </span>
+                          )}
+                          {isSent && (
+                            <span
+                              className="text-green-600 text-sm shrink-0"
+                              title="Replied"
+                              aria-label="Replied"
+                            >
+                              ✓
+                            </span>
+                          )}
+                          <span className="font-medium text-sm truncate">
+                            {email.fromAddress}
                           </span>
-                        )}
-                        <span className="font-medium text-sm truncate">
-                          {email.fromAddress}
+                        </div>
+                        <span className="text-xs text-gray-500 shrink-0">
+                          {formatEmailTime(email.receivedAt)}
                         </span>
                       </div>
-                      <span className="text-xs text-gray-500 shrink-0">
-                        {formatEmailTime(email.receivedAt)}
-                      </span>
-                    </div>
-                    <div className="text-sm font-medium mt-0.5 truncate">
-                      {email.subject || "(no subject)"}
-                    </div>
-                    <div className="text-sm text-gray-600 mt-0.5 line-clamp-1">
-                      {email.snippet}
-                    </div>
-                    {email.classificationReason && (
-                      <div className="text-xs text-gray-500 mt-1 italic">
-                        {email.classificationReason}
+                      <div className="text-sm font-medium mt-0.5 truncate">
+                        {email.subject || "(no subject)"}
                       </div>
-                    )}
+                      <div className="text-sm text-gray-600 mt-0.5 line-clamp-1">
+                        {email.snippet}
+                      </div>
+                      {email.classificationReason && (
+                        <div className="text-xs text-gray-500 mt-1 italic">
+                          {email.classificationReason}
+                        </div>
+                      )}
+                    </Link>
                   </li>
                 );
               })}

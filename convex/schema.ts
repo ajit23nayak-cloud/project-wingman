@@ -53,7 +53,15 @@ export default defineSchema({
     classificationError: v.optional(v.string()),
     classifiedAt: v.optional(v.number()),
     draftReply: v.union(v.string(), v.null()),
+    draftReplyGeneratedAt: v.optional(v.number()),
     draftReplyEditedAt: v.optional(v.number()),
+    // Day 4: reply lifecycle. Absent = not considered. "unsent" = draft
+    // generated, awaiting send. "sent" = delivered via Gmail.
+    replyStatus: v.optional(
+      v.union(v.literal("unsent"), v.literal("sent")),
+    ),
+    replyMessageId: v.optional(v.string()),
+    repliedAt: v.optional(v.number()),
     processedAt: v.optional(v.number()),
     status: v.union(
       v.literal("pending"),
@@ -68,6 +76,15 @@ export default defineSchema({
     userId: v.id("users"),
     sampleEmails: v.array(v.id("emails")),
     fineTunedAt: v.optional(v.number()),
+    lastUpdatedAt: v.number(),
+  }).index("by_userId", ["userId"]),
+
+  // Day 4: snippets of the user's own recent sent replies, used as voice
+  // priming context for the draftReply prompt. Single doc per user (the
+  // ingest action upserts on userId).
+  voiceSamples: defineTable({
+    userId: v.id("users"),
+    sampleSnippets: v.array(v.string()),
     lastUpdatedAt: v.number(),
   }).index("by_userId", ["userId"]),
 });

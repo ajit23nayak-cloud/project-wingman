@@ -5,6 +5,7 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  mutation,
   query,
 } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
@@ -28,6 +29,7 @@ export type EmailListItem = {
   classification: Doc<"emails">["classification"];
   classificationReason: string | undefined;
   receivedAt: number;
+  replyStatus: Doc<"emails">["replyStatus"];
 };
 
 const SNIPPET_MAX = 200;
@@ -41,6 +43,7 @@ function toListItem(e: Doc<"emails">): EmailListItem {
     classification: e.classification,
     classificationReason: e.classificationReason,
     receivedAt: e.receivedAt,
+    replyStatus: e.replyStatus,
   };
 }
 
@@ -467,5 +470,126 @@ export const classifyChunk = internalAction({
         total: emailIds.length,
       });
     }
+  },
+});
+
+// Day 4: detail-view fetch. Auth-required, user-scoped — never leak across
+// users. The detail view legitimately reads everything in the doc, so we
+// return Doc<"emails"> as-is (no slimming).
+export const getEmailById = query({
+  args: { emailId: v.id("emails") },
+  handler: async (ctx, args): Promise<Doc<"emails"> | null> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .first();
+    if (!user) return null;
+    const email = await ctx.db.get(args.emailId);
+    if (!email) return null;
+    if (email.userId !== user._id) return null;
+    return email;
+  },
+});
+
+// Day 4 reply lifecycle mutations. Internal — called by draftReply /
+// sendReply actions. Public mutations (updateDraftReplyText, skipReply)
+// below verify auth + user scope before patching.
+export const applyDraftReply = internalMutation({
+  args: {
+    emailId: v.id("emails"),
+    draft: v.string(),
+    generatedAt: v.number(),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    await ctx.db.patch(args.emailId, {
+      draftReply: args.draft,
+      draftReplyGeneratedAt: args.generatedAt,
+      replyStatus: "unsent",
+    });
+  },
+});
+
+export const markReplySent = internalMutation({
+  args: {
+    emailId: v.id("emails"),
+    gmailMessageId: v.string(),
+    repliedAt: v.number(),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    await ctx.db.patch(args.emailId, {
+      replyStatus: "sent",
+      replyMessageId: args.gmailMessageId,
+      repliedAt: args.repliedAt,
+    });
+  },
+});
+
+export const clearDraftReply = internalMutation({
+  args: { emailId: v.id("emails") },
+  handler: async (ctx, args): Promise<void> => {
+    await ctx.db.patch(args.emailId, {
+      draftReply: null,
+      draftReplyGeneratedAt: undefined,
+      draftReplyEditedAt: undefined,
+      replyStatus: undefined,
+      replyMessageId: undefined,
+      repliedAt: undefined,
+    });
+  },
+});
+
+export const updateDraftReplyText = mutation({
+  args: { emailId: v.id("emails"), draft: v.string() },
+  handler: async (ctx, args): Promise<null> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .first();
+    if (!user) return null;
+    const email = await ctx.db.get(args.emailId);
+    if (!email || email.userId !== user._id) return null;
+    // Refuse to overwrite the historical record of a sent reply.
+    if (email.replyStatus === "sent") return null;
+    await ctx.db.patch(args.emailId, {
+      draftReply: args.draft,
+      draftReplyEditedAt: Date.now(),
+    });
+    return null;
+  },
+});
+
+export const skipReply = mutation({
+  args: { emailId: v.id("emails") },
+  handler: async (ctx, args): Promise<null> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .first();
+    if (!user) return null;
+    const email = await ctx.db.get(args.emailId);
+    if (!email || email.userId !== user._id) return null;
+    // Already-sent replies are immutable history — skipping is a no-op.
+    if (email.replyStatus === "sent") return null;
+    await ctx.db.patch(args.emailId, {
+      draftReply: null,
+      draftReplyGeneratedAt: undefined,
+      draftReplyEditedAt: undefined,
+      replyStatus: undefined,
+      replyMessageId: undefined,
+      repliedAt: undefined,
+    });
+    return null;
   },
 });

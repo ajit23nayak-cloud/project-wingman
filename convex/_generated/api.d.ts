@@ -9,6 +9,8 @@
  */
 
 import type * as admin from "../admin.js";
+import type * as draftReply from "../draftReply.js";
+import type * as emailBody from "../emailBody.js";
 import type * as emails from "../emails.js";
 import type * as inbox from "../inbox.js";
 import type * as lib_clerkBackend from "../lib/clerkBackend.js";
@@ -16,7 +18,11 @@ import type * as lib_gmail from "../lib/gmail.js";
 import type * as lib_llm from "../lib/llm.js";
 import type * as llm from "../llm.js";
 import type * as prompts_classify from "../prompts/classify.js";
+import type * as prompts_draftReply from "../prompts/draftReply.js";
+import type * as sendReply from "../sendReply.js";
+import type * as sentMail from "../sentMail.js";
 import type * as users from "../users.js";
+import type * as voiceSamples from "../voiceSamples.js";
 
 import type {
   ApiFromModules,
@@ -26,6 +32,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
+  draftReply: typeof draftReply;
+  emailBody: typeof emailBody;
   emails: typeof emails;
   inbox: typeof inbox;
   "lib/clerkBackend": typeof lib_clerkBackend;
@@ -33,7 +41,11 @@ declare const fullApi: ApiFromModules<{
   "lib/llm": typeof lib_llm;
   llm: typeof llm;
   "prompts/classify": typeof prompts_classify;
+  "prompts/draftReply": typeof prompts_draftReply;
+  sendReply: typeof sendReply;
+  sentMail: typeof sentMail;
   users: typeof users;
+  voiceSamples: typeof voiceSamples;
 }>;
 
 /**

@@ -64,6 +64,29 @@ export const ingestEmails = action({
 
     await ctx.runMutation(internal.users.updateLastIngested, { userId });
 
+    // Day 4: on first ingest (or if voice samples were never gathered),
+    // schedule the sent-mail sample collection so draft-reply has a voice to
+    // mimic. Wrapped in try/catch — a sample-ingest failure must never break
+    // ingestEmails itself.
+    try {
+      const hasSamples: boolean = await ctx.runQuery(
+        internal.voiceSamples.hasVoiceSamplesInternal,
+        { userId },
+      );
+      if (!hasSamples) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.sentMail.ingestSentMailSamplesInternal,
+          { userId, clerkUserId },
+        );
+      }
+    } catch (err) {
+      console.error("[ingestEmails] voice-sample schedule failed", {
+        userId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     return { count: newCount };
   },
 });
