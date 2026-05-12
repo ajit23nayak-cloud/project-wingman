@@ -82,9 +82,27 @@ export default defineSchema({
   // Day 4: snippets of the user's own recent sent replies, used as voice
   // priming context for the draftReply prompt. Single doc per user (the
   // ingest action upserts on userId).
+  //
+  // sampleSnippets is the flat list used by draftReply today. sampleSnippetsByType
+  // (Day 5+) carries the same snippets bucketed by heuristic reply-type so the
+  // draft prompt can pick context matching the detected reply intent.
   voiceSamples: defineTable({
     userId: v.id("users"),
     sampleSnippets: v.array(v.string()),
+    sampleSnippetsByType: v.optional(
+      v.array(
+        v.object({
+          snippet: v.string(),
+          replyType: v.union(
+            v.literal("ack"),
+            v.literal("decline"),
+            v.literal("question"),
+            v.literal("propose"),
+            v.literal("info"),
+          ),
+        }),
+      ),
+    ),
     lastUpdatedAt: v.number(),
   }).index("by_userId", ["userId"]),
 });

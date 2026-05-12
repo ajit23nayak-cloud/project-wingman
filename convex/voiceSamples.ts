@@ -30,6 +30,20 @@ export const upsertVoiceSamplesInternal = internalMutation({
   args: {
     userId: v.id("users"),
     sampleSnippets: v.array(v.string()),
+    sampleSnippetsByType: v.optional(
+      v.array(
+        v.object({
+          snippet: v.string(),
+          replyType: v.union(
+            v.literal("ack"),
+            v.literal("decline"),
+            v.literal("question"),
+            v.literal("propose"),
+            v.literal("info"),
+          ),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args): Promise<void> => {
     const existing = await ctx.db
@@ -40,12 +54,14 @@ export const upsertVoiceSamplesInternal = internalMutation({
     if (existing) {
       await ctx.db.patch(existing._id, {
         sampleSnippets: args.sampleSnippets,
+        sampleSnippetsByType: args.sampleSnippetsByType,
         lastUpdatedAt: now,
       });
     } else {
       await ctx.db.insert("voiceSamples", {
         userId: args.userId,
         sampleSnippets: args.sampleSnippets,
+        sampleSnippetsByType: args.sampleSnippetsByType,
         lastUpdatedAt: now,
       });
     }

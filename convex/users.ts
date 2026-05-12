@@ -80,6 +80,13 @@ export const getByClerkIdInternal = internalQuery({
   },
 });
 
+export const getByIdInternal = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args): Promise<Doc<"users"> | null> => {
+    return await ctx.db.get(args.userId);
+  },
+});
+
 export const listAllInternal = internalQuery({
   args: {},
   handler: async (ctx): Promise<Doc<"users">[]> => {
@@ -128,6 +135,10 @@ export const applyChunkResult = internalMutation({
     const user = await ctx.db.get(args.userId);
     if (!user || !user.classificationProgress) return;
     const p = user.classificationProgress;
+    // Defensive: if a stale chunk fires after the run already hit its target,
+    // do not let the counters grow past totalToProcess. A double-scheduled
+    // chunk should be a no-op, not a corrupted progress doc.
+    if (p.processed >= p.totalToProcess) return;
     await ctx.db.patch(args.userId, {
       classificationProgress: {
         ...p,

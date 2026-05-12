@@ -9,7 +9,58 @@ import { getGoogleAccessToken } from "./lib/clerkBackend";
 
 const SAMPLE_MAX_CHARS = 200;
 const LOOKBACK_DAYS = 30;
-const MAX_SAMPLES = 30;
+// Day 5 voice-corpus deepening: pull 100 sent messages (was 30) so the
+// reply-type buckets actually have enough samples each to prime the
+// draftReply prompt without falling back to "no prior samples".
+const MAX_SAMPLES = 100;
+
+type ReplyType = "ack" | "decline" | "question" | "propose" | "info";
+
+// Heuristic reply-type classifier. No LLM — runs on every sent snippet at
+// ingest time. Pattern order matters: earlier rules win on ambiguous bodies.
+// This is deliberately approximate; voice priming tolerates noise far better
+// than the inbox classifier does.
+function classifyReplyType(snippet: string): ReplyType {
+  const text = snippet.trim();
+  const lower = text.toLowerCase();
+
+  if (
+    /\b(unfortunately|won['’]?t be able|can['’]?t make|have to (pass|decline)|going to pass|not a fit|not the right (time|fit)|won['’]?t work for (us|me))\b/.test(
+      lower,
+    )
+  ) {
+    return "decline";
+  }
+
+  if (
+    /\b(let['’]?s (meet|chat|sync|hop on|jump on|grab (a )?(call|coffee))|how about|would you be (free|available|open)|are you (free|available|open) (on|next|this|tomorrow)|propose (a |we )|book(ing)? (a )?(call|time|slot))\b/.test(
+      lower,
+    )
+  ) {
+    return "propose";
+  }
+
+  const hasQuestionMark = text.includes("?");
+  if (
+    hasQuestionMark ||
+    /\b(could you|can you|would you mind|wondering (if|whether)|curious (whether|if|about)|quick question|any chance)\b/.test(
+      lower,
+    )
+  ) {
+    return "question";
+  }
+
+  if (
+    text.length < 120 &&
+    /^(thanks|thank you|got it|sounds good|sure|noted|appreciate|will do|cheers|perfect|great|awesome)/i.test(
+      text,
+    )
+  ) {
+    return "ack";
+  }
+
+  return "info";
+}
 
 // Strip quoted history from a sent-mail body so the snippet captures only what
 // the user actually wrote. Two passes:
@@ -70,9 +121,15 @@ async function ingestForUser(
   }
 
   const sampleSnippets: string[] = [];
+  const sampleSnippetsByType: { snippet: string; replyType: ReplyType }[] = [];
   for (const m of messages) {
     const snippet = toSnippet(m.bodyText ?? "");
-    if (snippet.length > 0) sampleSnippets.push(snippet);
+    if (snippet.length === 0) continue;
+    sampleSnippets.push(snippet);
+    sampleSnippetsByType.push({
+      snippet,
+      replyType: classifyReplyType(snippet),
+    });
   }
   if (messages.length > 0 && sampleSnippets.length === 0) {
     console.warn("[ingestSentMailSamples] all sent messages stripped to empty", {
@@ -81,10 +138,24 @@ async function ingestForUser(
     });
   }
 
+  const typeCounts = sampleSnippetsByType.reduce<Record<ReplyType, number>>(
+    (acc, s) => {
+      acc[s.replyType] = (acc[s.replyType] ?? 0) + 1;
+      return acc;
+    },
+    { ack: 0, decline: 0, question: 0, propose: 0, info: 0 },
+  );
+  console.log("[ingestSentMailSamples] segmented", {
+    clerkUserId,
+    total: sampleSnippetsByType.length,
+    byType: typeCounts,
+  });
+
   try {
     await ctx.runMutation(internal.voiceSamples.upsertVoiceSamplesInternal, {
       userId,
       sampleSnippets,
+      sampleSnippetsByType,
     });
   } catch (err) {
     console.error("[ingestSentMailSamples] upsert failed", {

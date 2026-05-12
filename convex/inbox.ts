@@ -251,6 +251,10 @@ export const classifyEmail = action({
       emailId,
     });
     if (!email) return { error: "email_not_found" };
+    const owner = await ctx.runQuery(internal.users.getByIdInternal, {
+      userId: email.userId,
+    });
+    if (!owner) return { error: "owner_not_found" };
 
     try {
       const { result } = await withTimeout(
@@ -258,6 +262,7 @@ export const classifyEmail = action({
           fromAddress: email.fromAddress,
           subject: email.subject,
           snippet: email.snippet,
+          userEmail: owner.email,
         }),
         GEMINI_TIMEOUT_MS,
         `classifyEmail ${emailId}`,
@@ -365,8 +370,11 @@ export const classifyAllPending = action({
     });
 
     // Schedule chunk 0. Each chunk schedules the next, until offset >= total.
+    // userEmail rides along so the classifier can apply the self-sent rule
+    // without a per-email user lookup.
     await ctx.scheduler.runAfter(0, internal.inbox.classifyChunk, {
       userId: user._id,
+      userEmail: user.email,
       emailIds,
       offset: 0,
     });
@@ -383,10 +391,14 @@ export const classifyAllPending = action({
 export const classifyChunk = internalAction({
   args: {
     userId: v.id("users"),
+    userEmail: v.string(),
     emailIds: v.array(v.id("emails")),
     offset: v.number(),
   },
-  handler: async (ctx, { userId, emailIds, offset }): Promise<void> => {
+  handler: async (
+    ctx,
+    { userId, userEmail, emailIds, offset },
+  ): Promise<void> => {
     const slice = emailIds.slice(offset, offset + CHUNK_SIZE);
     let classified = 0;
     let failed = 0;
@@ -408,6 +420,7 @@ export const classifyChunk = internalAction({
                 fromAddress: email.fromAddress,
                 subject: email.subject,
                 snippet: email.snippet,
+                userEmail,
               }),
               GEMINI_TIMEOUT_MS,
               `classify ${emailId}`,
@@ -458,6 +471,7 @@ export const classifyChunk = internalAction({
     if (nextOffset < emailIds.length) {
       await ctx.scheduler.runAfter(0, internal.inbox.classifyChunk, {
         userId,
+        userEmail,
         emailIds,
         offset: nextOffset,
       });

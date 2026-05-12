@@ -1,5 +1,5 @@
 import { generateText } from "ai";
-import { getGeminiModel } from "../lib/llm";
+import { getGeminiModel, LLM_MAX_RETRIES } from "../lib/llm";
 
 const BODY_MAX_CHARS = 1500;
 
@@ -65,6 +65,7 @@ export async function draftReplyContent(input: {
     model: getGeminiModel(),
     system,
     prompt,
+    maxRetries: LLM_MAX_RETRIES,
   });
 
   return {

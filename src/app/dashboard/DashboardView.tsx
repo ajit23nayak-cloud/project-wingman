@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useUser, UserButton } from "@clerk/nextjs";
 import { useAction, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
@@ -77,9 +78,26 @@ const ERROR_MESSAGES: Record<string, string> = {
 };
 
 export function DashboardView() {
-  const { user: clerkUser } = useUser();
-  const convexUser = useQuery(api.users.currentUser);
-  const counts = useQuery(api.inbox.getClassificationCounts);
+  const router = useRouter();
+  const { user: clerkUser, isLoaded, isSignedIn } = useUser();
+  // Stale-render guard: while Clerk is still resolving the session, do not
+  // fire any Convex query. After it resolves, if there's no signed-in user
+  // (sign-out from another tab, expired session), bounce to /. Otherwise
+  // the dashboard renders its empty-auth state mid-flight and the Convex
+  // queries return null, which looks like a logged-in user with zero data.
+  const authReady = isLoaded && isSignedIn;
+  useEffect(() => {
+    if (isLoaded && !isSignedIn) router.replace("/");
+  }, [isLoaded, isSignedIn, router]);
+
+  const convexUser = useQuery(
+    api.users.currentUser,
+    authReady ? {} : "skip",
+  );
+  const counts = useQuery(
+    api.inbox.getClassificationCounts,
+    authReady ? {} : "skip",
+  );
   const totalCount = counts?.total;
   const ingestEmails = useAction(api.emails.ingestEmails);
   const testGemini = useAction(api.llm.testGemini);
@@ -101,7 +119,7 @@ export function DashboardView() {
   // running. Progress is observed via the small currentUser doc instead.
   const paginated = usePaginatedQuery(
     api.inbox.listPaginated,
-    liveClassifying ? "skip" : { classification: filter },
+    !authReady || liveClassifying ? "skip" : { classification: filter },
     { initialNumItems: PAGE_SIZE },
   );
   const emails = paginated.results;
@@ -138,6 +156,7 @@ export function DashboardView() {
   };
 
   useEffect(() => {
+    if (!authReady) return;
     if (convexUser === undefined) return;
     if (autoTriggeredRef.current) return;
     if (convexUser === null || !convexUser.lastIngestedAt) {
@@ -145,7 +164,7 @@ export function DashboardView() {
       runIngest(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [convexUser]);
+  }, [authReady, convexUser]);
 
   const runAiTest = async () => {
     setAiTesting(true);
@@ -201,6 +220,15 @@ export function DashboardView() {
   }, [progress]);
 
   const firstName = clerkUser?.firstName ?? clerkUser?.fullName ?? "there";
+
+  if (!isLoaded) {
+    return <main className="min-h-screen p-6" />;
+  }
+  if (!isSignedIn) {
+    // Effect above is redirecting; render nothing so the previous user's
+    // data never flashes during the bounce.
+    return <main className="min-h-screen p-6" />;
+  }
 
   return (
     <main className="min-h-screen p-6">

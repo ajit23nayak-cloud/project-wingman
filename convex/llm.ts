@@ -1,6 +1,6 @@
 import { action } from "./_generated/server";
 import { generateText } from "ai";
-import { getGeminiModel } from "./lib/llm";
+import { getGeminiModel, LLM_MAX_RETRIES } from "./lib/llm";
 
 export const testGemini = action({
   args: {},
@@ -9,6 +9,7 @@ export const testGemini = action({
       const { text } = await generateText({
         model: getGeminiModel(),
         prompt: "Reply with exactly: hello from gemini",
+        maxRetries: LLM_MAX_RETRIES,
       });
       return { text };
     } catch (err) {
