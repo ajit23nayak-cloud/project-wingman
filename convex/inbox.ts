@@ -285,13 +285,30 @@ export const classifyEmail = action({
   },
 });
 
-// Each chunk fits comfortably in Convex's 600s action ceiling: 50 emails
-// processed in inner-batches of 10 (parallel) with a 30s per-call timeout
-// = ~150s worst case, typically 30-90s.
+// Each chunk fits comfortably in Convex's 600s action ceiling. With the
+// 12-RPM defaults (INNER_BATCH=2, GAP_MS=10000), a 50-email chunk takes
+// ~325s worst case (25 inner-batches × ~13s).
 const CHUNK_SIZE = 50;
-// Inner concurrency within a chunk — 10 LLM calls in flight at once. The
-// 200ms gap between inner batches is intentional rate-limit slack.
-const INNER_BATCH = 10;
+
+// Inner concurrency + post-batch gap are tuned to stay under Gemini free
+// tier's 15 RPM cap. Defaults: INNER_BATCH=2 + GAP_MS=10000 → 12 RPM, 20%
+// headroom. Both are read fresh on every chunk so `npx convex env set
+// CLASSIFY_INNER_BATCH ...` tunes without a redeploy.
+//
+// Pace math: rpm = (INNER_BATCH * 60_000) / GAP_MS. Re-derive before
+// changing values — see feedback_rate_limit_math memory.
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+function getInnerBatch(): number {
+  return readPositiveIntEnv("CLASSIFY_INNER_BATCH", 2);
+}
+function getGapMs(): number {
+  return readPositiveIntEnv("CLASSIFY_GAP_MS", 10_000);
+}
 
 export type ClassifyEntrypointResult = {
   mode: "pending" | "failed";
@@ -400,13 +417,15 @@ export const classifyChunk = internalAction({
     { userId, userEmail, emailIds, offset },
   ): Promise<void> => {
     const slice = emailIds.slice(offset, offset + CHUNK_SIZE);
+    const innerBatch = getInnerBatch();
+    const gapMs = getGapMs();
     let classified = 0;
     let failed = 0;
     let inputTokens = 0;
     let outputTokens = 0;
 
-    for (let i = 0; i < slice.length; i += INNER_BATCH) {
-      const inner = slice.slice(i, i + INNER_BATCH);
+    for (let i = 0; i < slice.length; i += innerBatch) {
+      const inner = slice.slice(i, i + innerBatch);
       const results = await Promise.all(
         inner.map(async (emailId) => {
           const email = await ctx.runQuery(
@@ -453,8 +472,8 @@ export const classifyChunk = internalAction({
         }
       }
 
-      if (i + INNER_BATCH < slice.length) {
-        await new Promise((r) => setTimeout(r, 200));
+      if (i + innerBatch < slice.length) {
+        await new Promise((r) => setTimeout(r, gapMs));
       }
     }
 
