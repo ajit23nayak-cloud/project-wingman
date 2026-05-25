@@ -1,18 +1,35 @@
 import { generateText } from "ai";
 import { getGeminiModel, LLM_MAX_RETRIES } from "../lib/llm";
+import type { Segment } from "./classifySegment";
 
 const BODY_MAX_CHARS = 1500;
 
-function buildSystemPrompt(userFirstName: string, voiceSnippets: string[]): string {
+const SEGMENT_LABELS: Record<Segment, string> = {
+  cold_outreach: "cold-outreach",
+  internal_team: "internal-team",
+  investor_ish: "investor-ish",
+  casual_peer: "casual-peer",
+};
+
+function buildSystemPrompt(
+  userFirstName: string,
+  voiceSnippets: string[],
+  segment?: Segment,
+): string {
   const personHeader =
     userFirstName === "there"
       ? `You are drafting a reply on the user's behalf.`
       : `You are drafting a reply on behalf of ${userFirstName}.`;
 
-  const voicePrime =
-    voiceSnippets.length > 0
-      ? `Match their voice based on these recent reply samples:\n${voiceSnippets.join("\n---\n")}`
-      : `No prior reply samples available — write in a natural, professional, concise tone.`;
+  let voicePrime: string;
+  if (voiceSnippets.length === 0) {
+    voicePrime = `No prior reply samples available — write in a natural, professional, concise tone.`;
+  } else if (segment) {
+    const label = SEGMENT_LABELS[segment];
+    voicePrime = `Match the voice in these ${label} examples specifically — the user writes differently to different relationships:\n${voiceSnippets.join("\n---\n")}`;
+  } else {
+    voicePrime = `Match the voice in these recent reply samples:\n${voiceSnippets.join("\n---\n")}`;
+  }
 
   return `${personHeader} ${voicePrime}
 
@@ -43,6 +60,7 @@ Let the reply intent (acknowledging only / request info / propose next step / de
 export async function draftReplyContent(input: {
   userFirstName: string;
   voiceSnippets: string[];
+  segment?: Segment;
   fromAddress: string;
   subject: string;
   bodyText: string;
@@ -54,7 +72,11 @@ export async function draftReplyContent(input: {
     totalTokens?: number;
   };
 }> {
-  const system = buildSystemPrompt(input.userFirstName, input.voiceSnippets);
+  const system = buildSystemPrompt(
+    input.userFirstName,
+    input.voiceSnippets,
+    input.segment,
+  );
   const prompt = buildUserPrompt({
     fromAddress: input.fromAddress,
     subject: input.subject,

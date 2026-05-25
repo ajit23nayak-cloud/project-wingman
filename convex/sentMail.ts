@@ -4,62 +4,46 @@ import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { listSentMessagesLastNDays } from "./lib/gmail";
+import { listSentMessagesLastNDays, SentMessage } from "./lib/gmail";
 import { getGoogleAccessToken } from "./lib/clerkBackend";
+import { classifySegmentContent, Segment } from "./prompts/classifySegment";
+import { classifyReplyType } from "./lib/replyType";
 
 const SAMPLE_MAX_CHARS = 200;
-const LOOKBACK_DAYS = 30;
-// Day 5 voice-corpus deepening: pull 100 sent messages (was 30) so the
-// reply-type buckets actually have enough samples each to prime the
-// draftReply prompt without falling back to "no prior samples".
+// Day 6 voice-corpus deepening: widen window to 90 days × 100 messages so the
+// per-segment buckets fill enough for segment×replyType selection to fire
+// instead of falling back to global.
+const LOOKBACK_DAYS = 90;
 const MAX_SAMPLES = 100;
 
-type ReplyType = "ack" | "decline" | "question" | "propose" | "info";
+const GEMINI_TIMEOUT_MS = 30_000;
 
-// Heuristic reply-type classifier. No LLM — runs on every sent snippet at
-// ingest time. Pattern order matters: earlier rules win on ambiguous bodies.
-// This is deliberately approximate; voice priming tolerates noise far better
-// than the inbox classifier does.
-function classifyReplyType(snippet: string): ReplyType {
-  const text = snippet.trim();
-  const lower = text.toLowerCase();
+// Pace math: rpm = (INNER_BATCH * 60_000) / GAP_MS = (2 * 60_000) / 10_000 = 12
+// Matches the inbox classifier's 12 RPM (20% headroom under Gemini free-tier
+// 15 RPM cap). Re-derive before changing — see feedback_rate_limit_math memory.
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+function getInnerBatch(): number {
+  return readPositiveIntEnv("VOICE_INNER_BATCH", 2);
+}
+function getGapMs(): number {
+  return readPositiveIntEnv("VOICE_GAP_MS", 10_000);
+}
 
-  if (
-    /\b(unfortunately|won['’]?t be able|can['’]?t make|have to (pass|decline)|going to pass|not a fit|not the right (time|fit)|won['’]?t work for (us|me))\b/.test(
-      lower,
-    )
-  ) {
-    return "decline";
-  }
-
-  if (
-    /\b(let['’]?s (meet|chat|sync|hop on|jump on|grab (a )?(call|coffee))|how about|would you be (free|available|open)|are you (free|available|open) (on|next|this|tomorrow)|propose (a |we )|book(ing)? (a )?(call|time|slot))\b/.test(
-      lower,
-    )
-  ) {
-    return "propose";
-  }
-
-  const hasQuestionMark = text.includes("?");
-  if (
-    hasQuestionMark ||
-    /\b(could you|can you|would you mind|wondering (if|whether)|curious (whether|if|about)|quick question|any chance)\b/.test(
-      lower,
-    )
-  ) {
-    return "question";
-  }
-
-  if (
-    text.length < 120 &&
-    /^(thanks|thank you|got it|sounds good|sure|noted|appreciate|will do|cheers|perfect|great|awesome)/i.test(
-      text,
-    )
-  ) {
-    return "ack";
-  }
-
-  return "info";
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`timeout after ${ms}ms (${label})`)),
+        ms,
+      ),
+    ),
+  ]);
 }
 
 // Strip quoted history from a sent-mail body so the snippet captures only what
@@ -86,8 +70,14 @@ function toSnippet(bodyText: string): string {
   return stripped.slice(0, SAMPLE_MAX_CHARS).trim();
 }
 
+type PerMessageOutcome =
+  | { kind: "inserted"; segment: Segment }
+  | { kind: "skippedDedup" }
+  | { kind: "skippedEmpty" }
+  | { kind: "classifyFailed" };
+
 async function ingestForUser(
-  ctx: { runMutation: any },
+  ctx: { runMutation: any; runQuery: any },
   userId: Id<"users">,
   clerkUserId: string,
 ): Promise<{ count: number; error?: string }> {
@@ -105,7 +95,7 @@ async function ingestForUser(
     return { count: 0, error: "no_google_token" };
   }
 
-  let messages: { bodyText: string }[];
+  let messages: SentMessage[];
   try {
     messages = await listSentMessagesLastNDays(
       token,
@@ -120,52 +110,140 @@ async function ingestForUser(
     return { count: 0, error: "gmail_fetch_failed" };
   }
 
-  const sampleSnippets: string[] = [];
-  const sampleSnippetsByType: { snippet: string; replyType: ReplyType }[] = [];
-  for (const m of messages) {
-    const snippet = toSnippet(m.bodyText ?? "");
-    if (snippet.length === 0) continue;
-    sampleSnippets.push(snippet);
-    sampleSnippetsByType.push({
-      snippet,
-      replyType: classifyReplyType(snippet),
-    });
+  const innerBatch = getInnerBatch();
+  const gapMs = getGapMs();
+
+  let inserted = 0;
+  let skippedDedup = 0;
+  let skippedEmpty = 0;
+  let classifyFailed = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const segmentCounts: Record<Segment, number> = {
+    cold_outreach: 0,
+    internal_team: 0,
+    investor_ish: 0,
+    casual_peer: 0,
+  };
+
+  for (let i = 0; i < messages.length; i += innerBatch) {
+    const inner = messages.slice(i, i + innerBatch);
+    const outcomes: PerMessageOutcome[] = await Promise.all(
+      inner.map(async (m): Promise<PerMessageOutcome> => {
+        // Dedup BEFORE the LLM call — re-ingest of an already-stored message
+        // should never burn a Gemini quota credit.
+        const already = await ctx.runQuery(
+          internal.voiceSamples.hasGmailMessageIdInternal,
+          { userId, gmailMessageId: m.messageId },
+        );
+        if (already) return { kind: "skippedDedup" };
+
+        const snippet = toSnippet(m.bodyText ?? "");
+        if (snippet.length === 0) return { kind: "skippedEmpty" };
+
+        const replyType = classifyReplyType(snippet);
+
+        let segment: Segment;
+        let segmentConfidence: number;
+        let usageIn = 0;
+        let usageOut = 0;
+        try {
+          const { result, usage } = await withTimeout(
+            classifySegmentContent({
+              subject: m.subject,
+              bodyText: snippet,
+            }),
+            GEMINI_TIMEOUT_MS,
+            `classifySegment ${m.messageId}`,
+          );
+          segment = result.segment;
+          segmentConfidence = result.confidence;
+          usageIn = usage.inputTokens ?? 0;
+          usageOut = usage.outputTokens ?? 0;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error("[ingestSentMailSamples] segment classify failed", {
+            gmailMessageId: m.messageId,
+            error: msg,
+          });
+          // Leave for retry on next sync — don't insert a row with a guessed
+          // segment, that would poison the corpus.
+          return { kind: "classifyFailed" };
+        }
+
+        try {
+          await ctx.runMutation(
+            internal.voiceSamples.insertVoiceSampleInternal,
+            {
+              userId,
+              gmailMessageId: m.messageId,
+              snippet,
+              subject: m.subject,
+              replyType,
+              segment,
+              segmentConfidence,
+              sentAt: m.sentAt,
+            },
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error("[ingestSentMailSamples] insert failed", {
+            gmailMessageId: m.messageId,
+            error: msg,
+          });
+          return { kind: "classifyFailed" };
+        }
+
+        // Stash usage on the outcome so the outer loop can aggregate without
+        // a second pass. Cheap closure capture instead.
+        inputTokens += usageIn;
+        outputTokens += usageOut;
+        return { kind: "inserted", segment };
+      }),
+    );
+
+    for (const o of outcomes) {
+      switch (o.kind) {
+        case "inserted":
+          inserted++;
+          segmentCounts[o.segment]++;
+          break;
+        case "skippedDedup":
+          skippedDedup++;
+          break;
+        case "skippedEmpty":
+          skippedEmpty++;
+          break;
+        case "classifyFailed":
+          classifyFailed++;
+          break;
+      }
+    }
+
+    if (i + innerBatch < messages.length) {
+      await new Promise((r) => setTimeout(r, gapMs));
+    }
   }
-  if (messages.length > 0 && sampleSnippets.length === 0) {
+
+  if (messages.length > 0 && inserted === 0 && skippedDedup === 0) {
     console.warn("[ingestSentMailSamples] all sent messages stripped to empty", {
       clerkUserId,
       candidates: messages.length,
     });
   }
 
-  const typeCounts = sampleSnippetsByType.reduce<Record<ReplyType, number>>(
-    (acc, s) => {
-      acc[s.replyType] = (acc[s.replyType] ?? 0) + 1;
-      return acc;
-    },
-    { ack: 0, decline: 0, question: 0, propose: 0, info: 0 },
-  );
-  console.log("[ingestSentMailSamples] segmented", {
+  console.log("[ingestSentMailSamples] done", {
     clerkUserId,
-    total: sampleSnippetsByType.length,
-    byType: typeCounts,
+    candidates: messages.length,
+    inserted,
+    skippedDedup,
+    skippedEmpty,
+    classifyFailed,
+    bySegment: segmentCounts,
+    tokens: { input: inputTokens, output: outputTokens },
   });
 
-  try {
-    await ctx.runMutation(internal.voiceSamples.upsertVoiceSamplesInternal, {
-      userId,
-      sampleSnippets,
-      sampleSnippetsByType,
-    });
-  } catch (err) {
-    console.error("[ingestSentMailSamples] upsert failed", {
-      userId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return { count: 0, error: "upsert_failed" };
-  }
-
-  return { count: sampleSnippets.length };
+  return { count: inserted };
 }
 
 export const ingestSentMailSamples = action({

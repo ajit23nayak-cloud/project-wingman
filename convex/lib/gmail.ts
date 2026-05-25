@@ -72,6 +72,7 @@ function parseAddressList(value: string): string[] {
 export async function listEmailsLastNDays(
   accessToken: string,
   n = 30,
+  max?: number,
 ): Promise<NormalizedEmail[]> {
   const gmail = getGmailClient(accessToken);
   const query = `in:inbox newer_than:${n}d`;
@@ -79,18 +80,22 @@ export async function listEmailsLastNDays(
   const messageIds: { id: string; threadId: string }[] = [];
   let pageToken: string | undefined;
   do {
+    const remaining = max !== undefined ? max - messageIds.length : 100;
+    if (max !== undefined && remaining <= 0) break;
     const res = await gmail.users.messages.list({
       userId: "me",
       q: query,
-      maxResults: 100,
+      maxResults: max !== undefined ? Math.min(remaining, 100) : 100,
       pageToken,
     });
     const list = res.data.messages ?? [];
     for (const m of list) {
       if (m.id && m.threadId) {
         messageIds.push({ id: m.id, threadId: m.threadId });
+        if (max !== undefined && messageIds.length >= max) break;
       }
     }
+    if (max !== undefined && messageIds.length >= max) break;
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
 
@@ -129,22 +134,31 @@ export async function listEmailsLastNDays(
       }),
     );
     results.push(...batchResults);
+    if (max !== undefined && results.length >= max) break;
   }
 
-  return results;
+  return max !== undefined ? results.slice(0, max) : results;
 }
 
+export type SentMessage = {
+  messageId: string;
+  subject: string;
+  sentAt: number;
+  bodyText: string;
+};
+
 /**
- * List the user's recent SENT messages and return their plain-text bodies.
- * Used by Day 4 voice sampling: snippets of the user's own writing prime the
- * draftReply prompt. Caps total messages at `max` (default 30) regardless of
- * how many Gmail returns.
+ * List the user's recent SENT messages and return their plain-text bodies
+ * along with messageId / subject / sentAt for voice-corpus dedup and the
+ * /debug/voice-samples inspector. Used by Day 6 voice sampling: snippets of
+ * the user's own writing prime the draftReply prompt. Caps total messages at
+ * `max` regardless of how many Gmail returns.
  */
 export async function listSentMessagesLastNDays(
   accessToken: string,
   n = 30,
   max = 30,
-): Promise<{ bodyText: string }[]> {
+): Promise<SentMessage[]> {
   const gmail = getGmailClient(accessToken);
 
   const ids: string[] = [];
@@ -170,7 +184,7 @@ export async function listSentMessagesLastNDays(
 
   if (ids.length === 0) return [];
 
-  const out: { bodyText: string }[] = [];
+  const out: SentMessage[] = [];
   const batchSize = 10;
   for (let i = 0; i < ids.length; i += batchSize) {
     const batch = ids.slice(i, i + batchSize);
@@ -181,12 +195,23 @@ export async function listSentMessagesLastNDays(
           id,
           format: "full",
         });
-        const { bodyText } = extractBodies(res.data.payload);
-        return { bodyText };
+        const m = res.data;
+        const headers = m.payload?.headers;
+        const subject = getHeader(headers, "Subject");
+        const sentAt = m.internalDate
+          ? parseInt(m.internalDate, 10)
+          : Date.now();
+        const { bodyText } = extractBodies(m.payload);
+        return {
+          messageId: m.id ?? "",
+          subject,
+          sentAt,
+          bodyText,
+        };
       }),
     );
     for (const r of batchResults) {
-      if (r.bodyText && r.bodyText.trim().length > 0) {
+      if (r.bodyText && r.bodyText.trim().length > 0 && r.messageId) {
         out.push(r);
         if (out.length >= max) return out;
       }

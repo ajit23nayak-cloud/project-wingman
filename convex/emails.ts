@@ -4,6 +4,11 @@ import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { listEmailsLastNDays } from "./lib/gmail";
 import { getGoogleAccessToken } from "./lib/clerkBackend";
+import {
+  BACKFILL_EMAIL_CAP,
+  STALE_BUFFER,
+  INITIAL_LOOKBACK_DAYS,
+} from "./lib/limits";
 
 export const ingestEmails = action({
   args: {},
@@ -35,7 +40,11 @@ export const ingestEmails = action({
 
     let emails;
     try {
-      emails = await listEmailsLastNDays(token, 30);
+      emails = await listEmailsLastNDays(
+        token,
+        INITIAL_LOOKBACK_DAYS,
+        BACKFILL_EMAIL_CAP,
+      );
     } catch (err) {
       console.error("[ingestEmails] Gmail list failed", {
         clerkUserId,
@@ -64,13 +73,41 @@ export const ingestEmails = action({
 
     await ctx.runMutation(internal.users.updateLastIngested, { userId });
 
+    // Day 7 auto-prune: if active pool drifted past CAP + BUFFER, flag the
+    // oldest active rows archived_stale so the inbox stays bounded. Wrapped
+    // because a prune failure must never block a successful ingest.
+    try {
+      const beforeActive: number = await ctx.runQuery(
+        internal.inbox.countActiveForUserInternal,
+        { userId },
+      );
+      if (beforeActive > BACKFILL_EMAIL_CAP + STALE_BUFFER) {
+        const { pruned } = await ctx.runMutation(
+          internal.emailsInternal.pruneToActiveCap,
+          { userId, targetCap: BACKFILL_EMAIL_CAP },
+        );
+        const afterActive = beforeActive - pruned;
+        console.log("[ingestEmails] pruned to cap", {
+          userId,
+          beforeActive,
+          afterActive,
+          pruned,
+        });
+      }
+    } catch (err) {
+      console.error("[ingestEmails] prune failed", {
+        userId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     // Day 4: on first ingest (or if voice samples were never gathered),
     // schedule the sent-mail sample collection so draft-reply has a voice to
     // mimic. Wrapped in try/catch — a sample-ingest failure must never break
     // ingestEmails itself.
     try {
       const hasSamples: boolean = await ctx.runQuery(
-        internal.voiceSamples.hasVoiceSamplesInternal,
+        internal.voiceSamples.hasAnyVoiceSamplesInternal,
         { userId },
       );
       if (!hasSamples) {

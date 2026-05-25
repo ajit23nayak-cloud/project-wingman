@@ -55,6 +55,20 @@ export default defineSchema({
     draftReply: v.union(v.string(), v.null()),
     draftReplyGeneratedAt: v.optional(v.number()),
     draftReplyEditedAt: v.optional(v.number()),
+    // Day 6: voice-corpus draft provenance. Records which relationship segment
+    // the incoming email was classified into and which voice-sample rows fed
+    // the draft prompt. Powers /debug/voice-samples last-10-drafts panel and
+    // future "why did the draft sound like this" debugging. Absent on drafts
+    // generated before this feature shipped.
+    segmentUsed: v.optional(
+      v.union(
+        v.literal("cold_outreach"),
+        v.literal("internal_team"),
+        v.literal("investor_ish"),
+        v.literal("casual_peer"),
+      ),
+    ),
+    snippetIndicesUsed: v.optional(v.array(v.id("voiceSamples"))),
     // Day 4: reply lifecycle. Absent = not considered. "unsent" = draft
     // generated, awaiting send. "sent" = delivered via Gmail.
     replyStatus: v.optional(
@@ -68,6 +82,13 @@ export default defineSchema({
       v.literal("processed"),
       v.literal("failed"),
     ),
+    // Day 7 email-cap: rows aged out of the active window (oldest beyond
+    // BACKFILL_EMAIL_CAP or older than STALE_AGE_DAYS) are flagged here so
+    // dashboard listing, count, and reclassify queries can exclude them
+    // without dropping the data. v.optional so the schema deploys cleanly
+    // against existing rows that pre-date this field — queries treat
+    // absent as false (active).
+    archived_stale: v.optional(v.boolean()),
   })
     .index("by_userId", ["userId"])
     .index("by_userId_classification", ["userId", "classification"]),
@@ -79,30 +100,37 @@ export default defineSchema({
     lastUpdatedAt: v.number(),
   }).index("by_userId", ["userId"]),
 
-  // Day 4: snippets of the user's own recent sent replies, used as voice
-  // priming context for the draftReply prompt. Single doc per user (the
-  // ingest action upserts on userId).
+  // Day 6 voice-corpus deepening: per-row table (was a singleton-per-user doc
+  // through Day 5). Each row = one sent-email snippet, dual-tagged with
+  // replyType (heuristic, free) and segment (LLM-classified relationship
+  // register). Drafting prioritises segment match first, then segment×intent
+  // intersection when 5+ available, then segment-only, then global.
   //
-  // sampleSnippets is the flat list used by draftReply today. sampleSnippetsByType
-  // (Day 5+) carries the same snippets bucketed by heuristic reply-type so the
-  // draft prompt can pick context matching the detected reply intent.
+  // gmailMessageId + by_user_message index → dedup lookup on re-sync so we
+  // don't re-classify the same sent email every day.
   voiceSamples: defineTable({
     userId: v.id("users"),
-    sampleSnippets: v.array(v.string()),
-    sampleSnippetsByType: v.optional(
-      v.array(
-        v.object({
-          snippet: v.string(),
-          replyType: v.union(
-            v.literal("ack"),
-            v.literal("decline"),
-            v.literal("question"),
-            v.literal("propose"),
-            v.literal("info"),
-          ),
-        }),
-      ),
+    gmailMessageId: v.string(),
+    snippet: v.string(),
+    subject: v.optional(v.string()),
+    replyType: v.union(
+      v.literal("ack"),
+      v.literal("decline"),
+      v.literal("question"),
+      v.literal("propose"),
+      v.literal("info"),
     ),
-    lastUpdatedAt: v.number(),
-  }).index("by_userId", ["userId"]),
+    segment: v.union(
+      v.literal("cold_outreach"),
+      v.literal("internal_team"),
+      v.literal("investor_ish"),
+      v.literal("casual_peer"),
+    ),
+    segmentConfidence: v.number(),
+    sentAt: v.number(),
+    ingestedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_user_message", ["userId", "gmailMessageId"])
+    .index("by_user_segment", ["userId", "segment"]),
 });

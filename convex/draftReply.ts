@@ -2,8 +2,12 @@ import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { draftReplyContent } from "./prompts/draftReply";
+import {
+  classifySegmentContent,
+  type Segment,
+} from "./prompts/classifySegment";
+import { classifyReplyType } from "./lib/replyType";
 
-const BODY_MAX_CHARS = 1500;
 const GEMINI_TIMEOUT_MS = 30_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -50,12 +54,6 @@ export const generateDraftReply = action({
       if (!email) return null;
       if (email.userId !== user._id) return null;
 
-      const voice = await ctx.runQuery(
-        internal.voiceSamples.getVoiceSamplesByUserIdInternal,
-        { userId: user._id },
-      );
-      const voiceSnippets: string[] = voice?.sampleSnippets ?? [];
-
       // Fetch full body via the public fetchEmailBody action. ctx.auth carries
       // through ctx.runAction, so the action's own auth gate sees this user.
       // Falls back to the stored snippet on error or empty body.
@@ -75,18 +73,62 @@ export const generateDraftReply = action({
         // Continue with snippet fallback.
       }
 
+      // Segment the INCOMING email so we can pull matching voice samples.
+      // On failure (or empty body) fall back to internal_team — Ajit's most
+      // populated bucket, so the selection rule still produces something
+      // usable.
+      let segment: Segment = "internal_team";
+      let segmentInputTokens = 0;
+      let segmentOutputTokens = 0;
+      if (bodyText.trim().length === 0) {
+        console.warn(
+          "[generateDraftReply] empty body for segment classify, using internal_team fallback",
+          { emailId },
+        );
+      } else {
+        try {
+          const { result, usage } = await withTimeout(
+            classifySegmentContent({
+              subject: email.subject,
+              bodyText,
+            }),
+            GEMINI_TIMEOUT_MS,
+            `classifySegment ${emailId}`,
+          );
+          segment = result.segment;
+          segmentInputTokens = usage.inputTokens ?? 0;
+          segmentOutputTokens = usage.outputTokens ?? 0;
+        } catch (err) {
+          console.error(
+            "[generateDraftReply] segment classify failed, falling back to internal_team",
+            {
+              emailId,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          );
+        }
+      }
+
+      const replyType = classifyReplyType(bodyText);
+
+      const selection = await ctx.runQuery(
+        internal.voiceSamples.listForDraftSelectionInternal,
+        { userId: user._id, segment, replyType },
+      );
+
       const firstName = resolveFirstName({
         givenName: identity.givenName as string | undefined,
         name: identity.name as string | undefined,
       });
 
-      const { text } = await withTimeout(
+      const { text, usage } = await withTimeout(
         draftReplyContent({
           userFirstName: firstName,
-          voiceSnippets,
+          voiceSnippets: selection.snippets,
+          segment: selection.segmentUsed ?? undefined,
           fromAddress: email.fromAddress,
           subject: email.subject,
-          bodyText: bodyText.slice(0, BODY_MAX_CHARS),
+          bodyText,
         }),
         GEMINI_TIMEOUT_MS,
         `draftReply ${emailId}`,
@@ -97,10 +139,23 @@ export const generateDraftReply = action({
         return null;
       }
 
+      console.log("[generateDraftReply] drafted", {
+        emailId,
+        selectionPath: selection.selectionPath,
+        segmentUsed: selection.segmentUsed,
+        replyType,
+        snippetCount: selection.snippets.length,
+        inputTokens: (usage.inputTokens ?? 0) + segmentInputTokens,
+        outputTokens: (usage.outputTokens ?? 0) + segmentOutputTokens,
+      });
+
       await ctx.runMutation(internal.inbox.applyDraftReply, {
         emailId,
         draft: text,
         generatedAt: Date.now(),
+        segmentUsed: selection.segmentUsed ?? undefined,
+        snippetIndicesUsed:
+          selection.snippetIds.length > 0 ? selection.snippetIds : undefined,
       });
 
       return text;

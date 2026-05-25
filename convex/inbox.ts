@@ -11,6 +11,7 @@ import {
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { classifyEmailContent } from "./prompts/classify";
+import { ADMIN_EMAILS } from "./admin";
 
 const classificationFilterValidator = v.union(
   v.literal("all"),
@@ -74,17 +75,20 @@ export const listPaginated = query({
         ? ctx.db
             .query("emails")
             .withIndex("by_userId", (q) => q.eq("userId", user._id))
+            .filter((q) => q.neq(q.field("archived_stale"), true))
         : filter === "unclassified"
           ? ctx.db
               .query("emails")
               .withIndex("by_userId_classification", (q) =>
                 q.eq("userId", user._id).eq("classification", null),
               )
+              .filter((q) => q.neq(q.field("archived_stale"), true))
           : ctx.db
               .query("emails")
               .withIndex("by_userId_classification", (q) =>
                 q.eq("userId", user._id).eq("classification", filter),
-              );
+              )
+              .filter((q) => q.neq(q.field("archived_stale"), true));
 
     const result = await queryBuilder.order("desc").paginate(args.paginationOpts);
     return { ...result, page: result.page.map(toListItem) };
@@ -125,6 +129,7 @@ export const getClassificationCounts = query({
     const emails = await ctx.db
       .query("emails")
       .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .filter((q) => q.neq(q.field("archived_stale"), true))
       .collect();
     const counts = { ...empty, total: emails.length };
     for (const e of emails) {
@@ -162,6 +167,7 @@ export const insertIfNew = internalMutation({
       classification: null,
       draftReply: null,
       status: "pending",
+      archived_stale: false,
     });
     return true;
   },
@@ -182,8 +188,21 @@ export const listPendingForUserInternal = internalQuery({
       .withIndex("by_userId_classification", (q) =>
         q.eq("userId", args.userId).eq("classification", null),
       )
+      .filter((q) => q.neq(q.field("archived_stale"), true))
       .collect();
     return nulls.filter((e) => e.classificationError === undefined);
+  },
+});
+
+export const countActiveForUserInternal = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args): Promise<number> => {
+    const active = await ctx.db
+      .query("emails")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .filter((q) => q.neq(q.field("archived_stale"), true))
+      .collect();
+    return active.length;
   },
 });
 
@@ -193,6 +212,7 @@ export const listFailedForUserInternal = internalQuery({
     const all = await ctx.db
       .query("emails")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .filter((q) => q.neq(q.field("archived_stale"), true))
       .collect();
     return all.filter((e) => e.classificationError !== undefined);
   },
@@ -536,13 +556,83 @@ export const applyDraftReply = internalMutation({
     emailId: v.id("emails"),
     draft: v.string(),
     generatedAt: v.number(),
+    // Day 6: voice-corpus provenance. Optional so older callers / cold-start
+    // (no samples at all) still work — `segmentUsed` is null when fallback
+    // path was "global" (no segment match) or "empty" (no samples).
+    segmentUsed: v.optional(
+      v.union(
+        v.literal("cold_outreach"),
+        v.literal("internal_team"),
+        v.literal("investor_ish"),
+        v.literal("casual_peer"),
+      ),
+    ),
+    snippetIndicesUsed: v.optional(v.array(v.id("voiceSamples"))),
   },
   handler: async (ctx, args): Promise<void> => {
     await ctx.db.patch(args.emailId, {
       draftReply: args.draft,
       draftReplyGeneratedAt: args.generatedAt,
       replyStatus: "unsent",
+      segmentUsed: args.segmentUsed,
+      snippetIndicesUsed: args.snippetIndicesUsed,
     });
+  },
+});
+
+// Day 6: admin-only listing for /debug/voice-samples last-10-drafts panel.
+// Returns the 10 most recently drafted emails with draft provenance. Gated by
+// the same admin-email check used in voiceSamples.listAllForAdmin.
+
+export type RecentDraftRow = {
+  _id: Id<"emails">;
+  fromAddress: string;
+  subject: string;
+  draftReply: string | null;
+  draftReplyGeneratedAt: number | undefined;
+  segmentUsed: Doc<"emails">["segmentUsed"];
+  snippetIndicesUsed: Id<"voiceSamples">[];
+};
+
+export const listRecentDraftsForAdmin = query({
+  args: {},
+  handler: async (ctx): Promise<RecentDraftRow[]> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .first();
+    if (!user) return [];
+    if (!ADMIN_EMAILS.includes(user.email)) return [];
+
+    // Push the drafted-only predicate to Convex so we don't ship the full
+    // emails table to the client just to filter to ~10 drafted rows.
+    // replyStatus is undefined on non-drafted rows, "unsent" or "sent" on
+    // drafted ones — neq(field, undefined) keeps both drafted states.
+    const drafted = (
+      await ctx.db
+        .query("emails")
+        .withIndex("by_userId", (q) => q.eq("userId", user._id))
+        .filter((q) => q.neq(q.field("replyStatus"), undefined))
+        .collect()
+    )
+      .sort(
+        (a, b) =>
+          (b.draftReplyGeneratedAt ?? 0) - (a.draftReplyGeneratedAt ?? 0),
+      )
+      .slice(0, 10);
+    return drafted.map((e) => ({
+      _id: e._id,
+      fromAddress: e.fromAddress,
+      subject: e.subject,
+      draftReply: e.draftReply,
+      draftReplyGeneratedAt: e.draftReplyGeneratedAt,
+      segmentUsed: e.segmentUsed,
+      snippetIndicesUsed: e.snippetIndicesUsed ?? [],
+    }));
   },
 });
 
