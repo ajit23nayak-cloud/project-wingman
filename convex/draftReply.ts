@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { Doc } from "./_generated/dataModel";
 import { draftReplyContent } from "./prompts/draftReply";
 import {
   classifySegmentContent,
@@ -37,15 +38,36 @@ function resolveFirstName(identity: {
 }
 
 export const generateDraftReply = action({
-  args: { emailId: v.id("emails") },
-  handler: async (ctx, { emailId }): Promise<string | null> => {
+  // userEmail + firstName are CLI-only: when no Clerk identity is present we
+  // need (a) a way to disambiguate which user owns the email when there's
+  // more than one row in `users`, and (b) a way to pass the human first name
+  // that the prompt would otherwise pull from identity.givenName. Both are
+  // optional; the auth path ignores them.
+  args: {
+    emailId: v.id("emails"),
+    userEmail: v.optional(v.string()),
+    firstName: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    { emailId, userEmail, firstName: firstNameArg },
+  ): Promise<string | null> => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
 
     try {
-      const user = await ctx.runQuery(internal.users.getByClerkIdInternal, {
-        clerkUserId: identity.subject,
-      });
+      let user: Doc<"users"> | null;
+      if (identity) {
+        user = await ctx.runQuery(internal.users.getByClerkIdInternal, {
+          clerkUserId: identity.subject,
+        });
+      } else if (userEmail) {
+        user = await ctx.runQuery(internal.users.getByEmailInternal, {
+          email: userEmail,
+        });
+      } else {
+        const all = await ctx.runQuery(internal.users.listAllInternal, {});
+        user = all.length === 1 ? all[0] : null;
+      }
       if (!user) return null;
 
       const email = await ctx.runQuery(internal.inbox.getEmailByIdInternal, {
@@ -116,10 +138,12 @@ export const generateDraftReply = action({
         { userId: user._id, segment, replyType },
       );
 
-      const firstName = resolveFirstName({
-        givenName: identity.givenName as string | undefined,
-        name: identity.name as string | undefined,
-      });
+      const firstName = identity
+        ? resolveFirstName({
+            givenName: identity.givenName as string | undefined,
+            name: identity.name as string | undefined,
+          })
+        : (firstNameArg && firstNameArg.length > 0 ? firstNameArg : "there");
 
       const { text, usage } = await withTimeout(
         draftReplyContent({

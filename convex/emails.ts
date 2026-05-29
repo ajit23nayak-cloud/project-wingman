@@ -1,5 +1,6 @@
 "use node";
 
+import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { listEmailsLastNDays } from "./lib/gmail";
@@ -9,20 +10,52 @@ import {
   STALE_BUFFER,
   INITIAL_LOOKBACK_DAYS,
 } from "./lib/limits";
+import { Id } from "./_generated/dataModel";
 
 export const ingestEmails = action({
-  args: {},
-  handler: async (ctx): Promise<{ count: number; error?: string }> => {
+  // Optional userEmail is a CLI-only disambiguator: when the caller has no
+  // Clerk identity AND there are 2+ users in the table, the operator must
+  // pass --user-email to pick the target. Mirrors the sentMail single-user
+  // fallback shape but extends it for the post-beta multi-user case.
+  args: { userEmail: v.optional(v.string()) },
+  handler: async (
+    ctx,
+    { userEmail },
+  ): Promise<{ count: number; error?: string }> => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return { count: 0, error: "not_authenticated" };
-    }
-    const clerkUserId = identity.subject;
 
-    const userId = await ctx.runMutation(internal.users.getOrCreateInternal, {
-      clerkUserId,
-      email: identity.email ?? "",
-    });
+    let userId: Id<"users">;
+    let clerkUserId: string;
+
+    if (identity) {
+      clerkUserId = identity.subject;
+      userId = await ctx.runMutation(internal.users.getOrCreateInternal, {
+        clerkUserId,
+        email: identity.email ?? "",
+      });
+    } else if (userEmail) {
+      const target = await ctx.runQuery(internal.users.getByEmailInternal, {
+        email: userEmail,
+      });
+      if (!target) {
+        return {
+          count: 0,
+          error: `user_not_found_for_email (${userEmail})`,
+        };
+      }
+      userId = target._id;
+      clerkUserId = target.clerkUserId;
+    } else {
+      const all = await ctx.runQuery(internal.users.listAllInternal, {});
+      if (all.length !== 1) {
+        return {
+          count: 0,
+          error: `not_authenticated_and_cli_fallback_requires_1_user_or_userEmail (found ${all.length})`,
+        };
+      }
+      userId = all[0]._id;
+      clerkUserId = all[0].clerkUserId;
+    }
 
     let token: string | null;
     try {

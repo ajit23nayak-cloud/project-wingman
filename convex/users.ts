@@ -94,6 +94,18 @@ export const listAllInternal = internalQuery({
   },
 });
 
+// CLI-fallback disambiguator: when an action is invoked without Clerk identity
+// AND the users table has 2+ rows, the caller passes --user-email to pick the
+// target. Matches on the stored Clerk-email (lowercased compare).
+export const getByEmailInternal = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, args): Promise<Doc<"users"> | null> => {
+    const target = args.email.toLowerCase();
+    const all = await ctx.db.query("users").collect();
+    return all.find((u) => u.email.toLowerCase() === target) ?? null;
+  },
+});
+
 // Overwrites the progress doc with a fresh run. Called once by the
 // classifyAllPending entrypoint before chunk 0 is scheduled.
 export const initClassificationProgress = internalMutation({
