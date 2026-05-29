@@ -92,6 +92,38 @@ export const hasAnyVoiceSamplesInternal = internalQuery({
   },
 });
 
+// CLI inspection of the corpus state — counts per segment plus total.
+// Mirrors what /debug/voice-samples shows, but callable without identity
+// so the Day 8+ morning-order CLI flow can verify distribution before
+// generating test drafts.
+export const countBySegmentInternal = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    cold_outreach: number;
+    internal_team: number;
+    investor_ish: number;
+    casual_peer: number;
+    total: number;
+  }> => {
+    const rows = await ctx.db
+      .query("voiceSamples")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    const counts = {
+      cold_outreach: 0,
+      internal_team: 0,
+      investor_ish: 0,
+      casual_peer: 0,
+      total: rows.length,
+    };
+    for (const r of rows) counts[r.segment]++;
+    return counts;
+  },
+});
+
 // Drafting-time sample selection. Implements the prioritisation rule:
 //   1. samples matching the incoming email's segment
 //   2. if 5+ available there, narrow to segment × replyType
