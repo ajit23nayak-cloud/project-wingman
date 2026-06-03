@@ -17,9 +17,12 @@ imports `"server-only"`, which makes Next.js bundle-fail if it's ever pulled
 into a client component.
 
 `src/lib/supabase/server.ts` may be imported only from `src/app/api/**` (or
-server actions / route handlers, when we add them). If you find yourself
-importing it from a client file, stop — the right shape is an API route
-that the client `fetch`es.
+server actions / route handlers, when we add them) — or from a sibling lib
+helper that itself imports `"server-only"` and is only ever imported from
+those same server contexts (e.g. `src/lib/auth/resolveUser.ts`). The
+runtime guarantee is the `"server-only"` chain, not the literal directory.
+If you find yourself importing it from a client file, stop — the right
+shape is an API route that the client `fetch`es.
 
 ```ts
 // ✅ src/app/api/admin/something/route.ts
