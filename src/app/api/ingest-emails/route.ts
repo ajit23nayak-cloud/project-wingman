@@ -89,6 +89,10 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Split: first N fully fetched, rest queued as stubs -------------------
+  // ids.slice(0, FIRST_INGEST_FULL) covers indices 0..FIRST_INGEST_FULL-1
+  // (exactly FIRST_INGEST_FULL items); ids.slice(FIRST_INGEST_FULL) covers
+  // FIRST_INGEST_FULL..end. The two slices partition ids cleanly — no
+  // overlap, no gap. fullIds.length + stubIds.length === ids.length always.
   const fullIds = ids.slice(0, FIRST_INGEST_FULL);
   const stubIds = ids.slice(FIRST_INGEST_FULL);
 

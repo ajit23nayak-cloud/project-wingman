@@ -158,6 +158,93 @@ export async function getEmailsByIds(
   return out;
 }
 
+// Per-row outcome for the cron body-fetch path. A single Gmail 404 on one
+// message shouldn't fail the whole batch — the row gets marked status='failed'
+// with a stable error code so the operator can find it in cron_recent_failures.
+export type LenientFetchResult =
+  | { kind: "ok"; data: NormalizedEmail }
+  | { kind: "not_found" }
+  | { kind: "error"; detail: string };
+
+export type LenientFetchOutcome = {
+  id: EmailIdRef;
+  result: LenientFetchResult;
+};
+
+// Gmail messages.get over a batch of IDs, returning per-row outcomes instead
+// of throwing on the first error. Use from the body-fetch cron route where
+// one missing/deleted message shouldn't poison the whole chunk.
+export async function getEmailsByIdsLenient(
+  accessToken: string,
+  ids: EmailIdRef[],
+  concurrency = 5,
+): Promise<LenientFetchOutcome[]> {
+  const gmail = getGmailClient(accessToken);
+  const out: LenientFetchOutcome[] = [];
+  for (let i = 0; i < ids.length; i += concurrency) {
+    const batch = ids.slice(i, i + concurrency);
+    const results = await Promise.all(
+      batch.map(
+        async (idRef): Promise<LenientFetchOutcome> => {
+          try {
+            const res = await gmail.users.messages.get({
+              userId: "me",
+              id: idRef.messageId,
+              format: "full",
+            });
+            const m = res.data;
+            const headers = m.payload?.headers;
+            const fromAddress = getHeader(headers, "From");
+            const toAddresses = parseAddressList(getHeader(headers, "To"));
+            const subject = getHeader(headers, "Subject");
+            const snippet = m.snippet ?? "";
+            const receivedAt = m.internalDate
+              ? new Date(parseInt(m.internalDate, 10))
+              : new Date();
+            const { bodyText, bodyHtml } = extractBodies(m.payload);
+            return {
+              id: idRef,
+              result: {
+                kind: "ok",
+                data: {
+                  messageId: m.id ?? "",
+                  threadId: m.threadId ?? "",
+                  fromAddress,
+                  toAddresses,
+                  subject,
+                  snippet,
+                  receivedAt,
+                  bodyText,
+                  bodyHtml,
+                },
+              },
+            };
+          } catch (err) {
+            const e = err as {
+              code?: number;
+              status?: number;
+              message?: string;
+            };
+            const code = e.code ?? e.status;
+            if (code === 404) {
+              return { id: idRef, result: { kind: "not_found" } };
+            }
+            return {
+              id: idRef,
+              result: {
+                kind: "error",
+                detail: e.message ?? String(err),
+              },
+            };
+          }
+        },
+      ),
+    );
+    out.push(...results);
+  }
+  return out;
+}
+
 // Convex-era one-shot: list + get in one call. Kept for ingestSentMail
 // (handler #2) where we want a single helper for the sent-folder fetch.
 export async function listSentMessagesLastNDays(
