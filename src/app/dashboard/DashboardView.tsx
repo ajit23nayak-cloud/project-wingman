@@ -138,7 +138,7 @@ export function DashboardView() {
     setIsIngesting(true);
     setIngestError(null);
     try {
-      const res = await ingestEmails();
+      const res = await ingestEmails({});
       if (res.error) {
         setIngestError(ERROR_MESSAGES[res.error] ?? `Error: ${res.error}`);
       } else if (isAuto) {
