@@ -260,7 +260,10 @@ export function DashboardView() {
             <ul className="divide-y divide-gray-200 border-y border-gray-200">
               {emails.map((email) => {
                 const isArchive = email.classification === "archive";
-                const isSent = email.drafts[0]?.status === "sent";
+                const draft = Array.isArray(email.drafts)
+                  ? email.drafts[0]
+                  : email.drafts;
+                const isSent = draft?.status === "sent";
                 const fade = isArchive || isSent;
                 return (
                   <li key={email.id}>

@@ -80,7 +80,13 @@ export type EmailRow = {
   classification_reason: string | null;
   classification_error: string | null;
   status: "pending" | "processed" | "failed";
-  drafts: { status: "unsent" | "sent" }[];
+  // PostgREST embedded resource: drafts.email_id is UNIQUE, so this comes back
+  // as a single object OR null — NOT an array. We accept array shape too for
+  // defensive parsing (e.g., if the FK uniqueness ever changes).
+  drafts:
+    | { status: "unsent" | "sent" }
+    | { status: "unsent" | "sent" }[]
+    | null;
 };
 
 export type FilterValue = "all" | "urgent" | "important" | "fyi" | "archive";

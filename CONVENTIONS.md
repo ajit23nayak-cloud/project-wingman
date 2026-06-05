@@ -49,3 +49,52 @@ prevents the same mismatch on the next function.
 `private`: it's called from inside pg_cron job bodies as
 `select private.get_secret('cron_secret')`, never via `.rpc()`. The split
 rule keeps it where it belongs.
+
+## Rule: log the actual response shape before declaring a TS type
+
+Three production bugs in the 24h window of 2026-06-04 → 2026-06-05 had the
+same root cause: declaring a TypeScript shape and then assuming Supabase /
+PostgREST returns that shape.
+
+- `claim_pending_fetch_chunk` — code called `.rpc()` against the wrong
+  schema; "function exists in migration file" was conflated with "function
+  callable from the bare client." Fixed in migration 0008.
+- `email_counts` — migration 0009 was authored and committed but never
+  applied; the dashboard hit `.rpc('email_counts')` against a function that
+  didn't exist in the live DB. Fixed by applying the migration manually.
+- `email.drafts` embed — the TS type declared `drafts: T[]` but PostgREST
+  returns a single object OR `null` when the foreign key is UNIQUE.
+  `email.drafts[0]?.status` crashed at the `[0]` step on null. Fixed in this
+  commit.
+
+### Rules
+
+1. **Log before typing.** For every new `supabase.rpc(...)`, every new
+   `.from(...).select(...)` with an embedded resource, and every new RPC
+   migration, call it once with `console.log(JSON.stringify(data, null, 2))`
+   in the dev console (or a one-off test route) and capture the actual
+   shape. Write the TS type from what you observed, not what you intended.
+
+2. **Embedded resources: array vs single object.** `select("..., other(field)")`
+   returns:
+   - a **single object** or `null` when the foreign key from `other` has a
+     UNIQUE constraint (one-to-one relation)
+   - an **array** otherwise (one-to-many)
+   When in doubt, type as the union of both + null and branch in code:
+   `const row = Array.isArray(x) ? x[0] : x; row?.field`
+
+3. **Migration files are not proof of application.** Supabase migrations in
+   `supabase/migrations/` are manually applied per the header of `0002`.
+   After authoring a migration that adds an object the app depends on, verify
+   it landed in the live DB before declaring the feature shipped:
+   - functions: `select proname from pg_proc where proname = '<fn>'`
+   - tables: `\d <table>` (psql) or query `information_schema.tables`
+   - columns: `\d <table>` or `information_schema.columns`
+   - any object: query `pg_catalog` directly from the SQL Editor
+   Add the verification command to the commit message or PR description so a
+   reviewer can sanity-check.
+
+### Background
+
+See migration 0008 (schema mismatch), the 2026-06-05 dashboard hotfix
+commit (one-to-one embed handling), and the email_counts gap above.
