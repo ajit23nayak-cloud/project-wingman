@@ -52,20 +52,26 @@ rule keeps it where it belongs.
 
 ## Rule: log the actual response shape before declaring a TS type
 
-Three production bugs in the 24h window of 2026-06-04 → 2026-06-05 had the
-same root cause: declaring a TypeScript shape and then assuming Supabase /
-PostgREST returns that shape.
+Four production bugs in the 24h window of 2026-06-04 → 2026-06-05 had the
+same root cause: declaring a TypeScript / config shape and then assuming
+Supabase, PostgREST, or Vercel honors that shape without verifying.
 
 - `claim_pending_fetch_chunk` — code called `.rpc()` against the wrong
   schema; "function exists in migration file" was conflated with "function
   callable from the bare client." Fixed in migration 0008.
+- `cron_secret` — pg_cron's `private.get_secret('cron_secret')` returned
+  null because the `private.config` row was never inserted, and Vercel's
+  `CRON_SECRET` env var was never set either. Cron jobs 401'd silently for
+  a day. Same class: configuration declared in code but not propagated to
+  both runtimes that consume it.
 - `email_counts` — migration 0009 was authored and committed but never
   applied; the dashboard hit `.rpc('email_counts')` against a function that
-  didn't exist in the live DB. Fixed by applying the migration manually.
+  didn't exist in the live DB. Fixed by applying the migration manually
+  2026-06-05.
 - `email.drafts` embed — the TS type declared `drafts: T[]` but PostgREST
   returns a single object OR `null` when the foreign key is UNIQUE.
-  `email.drafts[0]?.status` crashed at the `[0]` step on null. Fixed in this
-  commit.
+  `email.drafts[0]?.status` crashed at the `[0]` step on null. Fixed in
+  commit 1af54a9.
 
 ### Rules
 
@@ -75,26 +81,47 @@ PostgREST returns that shape.
    in the dev console (or a one-off test route) and capture the actual
    shape. Write the TS type from what you observed, not what you intended.
 
-2. **Embedded resources: array vs single object.** `select("..., other(field)")`
-   returns:
-   - a **single object** or `null` when the foreign key from `other` has a
-     UNIQUE constraint (one-to-one relation)
-   - an **array** otherwise (one-to-many)
-   When in doubt, type as the union of both + null and branch in code:
+2. **Pin the observed shape as a code comment.** Above every TS type that
+   describes a Supabase response, add a 1–3 line comment explaining what
+   was observed and (when non-obvious) why. The comment is the proof for
+   the next maintainer that the type was derived from data, not invented.
+   `src/lib/supabase/hooks.ts` `EmailRow.drafts` is the canonical example —
+   the comment captures both the runtime shape and the PostgREST rule that
+   produced it.
+
+3. **Embedded resources: array vs single object depends on direction +
+   uniqueness.** With `select("..., other(field)")`:
+   - Embedding a **parent** (current row's FK points into `other`) → always
+     a single object or `null` (many-to-one).
+   - Embedding **children** (`other`'s FK points into current row) →
+     normally an array, but **a single object or `null` if `other`'s FK
+     column has a UNIQUE constraint** (one-to-one).
+   When in doubt, type as the union of all three and branch in code:
    `const row = Array.isArray(x) ? x[0] : x; row?.field`
 
-3. **Migration files are not proof of application.** Supabase migrations in
-   `supabase/migrations/` are manually applied per the header of `0002`.
-   After authoring a migration that adds an object the app depends on, verify
-   it landed in the live DB before declaring the feature shipped:
-   - functions: `select proname from pg_proc where proname = '<fn>'`
-   - tables: `\d <table>` (psql) or query `information_schema.tables`
-   - columns: `\d <table>` or `information_schema.columns`
-   - any object: query `pg_catalog` directly from the SQL Editor
-   Add the verification command to the commit message or PR description so a
-   reviewer can sanity-check.
+4. **Migration files are not proof of application — paste the verification
+   in the commit message.** Supabase migrations in `supabase/migrations/`
+   are manually applied per the header of `0002_phase1_full_schema.sql`.
+   After authoring a migration that adds an object the app depends on, run
+   the matching verification query in the Supabase SQL Editor AND paste
+   the output rows into the commit message body so a reviewer can
+   sanity-check. The verification is not optional and not deferrable.
+   - functions: `select proname, pg_get_function_result(oid) from pg_proc where proname = '<fn>' and pronamespace = 'public'::regnamespace;`
+   - tables: `select column_name, data_type from information_schema.columns where table_name = '<table>' and table_schema = 'public';`
+   - rows in a config table: `select * from <schema>.<table> where <key> = '<value>';`
+   - any object: query `pg_catalog` directly from the SQL Editor.
+   The `\d <table>` shortcut from `psql` is NOT available in Supabase SQL
+   Editor — use `information_schema` instead.
+
+5. **Two-runtime secrets need a smoke test that hits both.** Any value
+   that lives in **both** Vercel env vars AND a Supabase table / config
+   row (because pg_cron can't read Vercel env) needs a one-shot smoke
+   test exercising both consumers before the feature is called shipped.
+   See `supabase/CONVENTIONS.md` → "Cron-triggered routes" for the
+   canonical `CRON_SECRET` pattern.
 
 ### Background
 
-See migration 0008 (schema mismatch), the 2026-06-05 dashboard hotfix
-commit (one-to-one embed handling), and the email_counts gap above.
+See migration 0008 (schema mismatch), migration 0009 (function existence
+gap), commit 1af54a9 (one-to-one embed handling), and the cron-secret
+postmortem in the bug list above.
