@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { SignInButton } from "@clerk/nextjs";
 import { WingmanLogo } from "@/components/WingmanLogo";
 import styles from "./page.module.css";
@@ -766,8 +767,8 @@ export default function LandingPage() {
             </div>
             <div className={styles.footerCol}>
               <h5>Legal</h5>
-              <a href="#">Privacy policy</a>
-              <a href="#">Terms of service</a>
+              <Link href="/privacy">Privacy policy</Link>
+              <Link href="/terms">Terms of service</Link>
               <a href="#">Data + security</a>
             </div>
           </div>
