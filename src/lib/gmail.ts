@@ -1,6 +1,35 @@
 import "server-only";
 import { google, gmail_v1 } from "googleapis";
 
+// Typed sentinel for Gmail auth failures (401 / invalid_grant / invalid_credentials).
+// Routes catch this specifically and call markGmailReauthNeeded — without a
+// typed error, the catch would have to inspect every Error subclass to know
+// whether the failure is "user needs to reconnect" vs. "transient API hiccup."
+export class GmailAuthError extends Error {
+  constructor(message = "gmail_auth_failed") {
+    super(message);
+    this.name = "GmailAuthError";
+  }
+}
+
+// Detects auth-class errors from googleapis. The thrown shape is observed
+// as `{ code?: number, status?: number, message?: string, ... }` (GaxiosError).
+// 401 alone could in theory be quota/scoping, but in practice the only 401s
+// we see from Gmail are revoked/expired grants; including 'invalid_grant'
+// + 'invalid_credentials' covers the typed messages.
+export function isGmailAuthError(err: unknown): boolean {
+  const e = err as { code?: number; status?: number; message?: string };
+  const code = e?.code ?? e?.status;
+  if (code === 401) return true;
+  if (
+    typeof e?.message === "string" &&
+    /invalid_grant|invalid_credentials/i.test(e.message)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export type EmailIdRef = { messageId: string; threadId: string };
 
 export type NormalizedEmail = {
@@ -121,10 +150,15 @@ export async function getEmailsByIds(
 ): Promise<NormalizedEmail[]> {
   const gmail = getGmailClient(accessToken);
   const out: NormalizedEmail[] = [];
-  for (let i = 0; i < ids.length; i += concurrency) {
-    const batch = ids.slice(i, i + concurrency);
-    const results = await Promise.all(
-      batch.map(async ({ messageId }) => {
+  // Defense-in-depth wrap: if a 401/invalid_grant fires mid-batch (rare —
+  // tokens are fetched fresh per route invocation, but a long ingest could
+  // span an expiry boundary), surface it as a typed GmailAuthError so the
+  // route can mark reauth-needed instead of bubbling a raw GaxiosError.
+  try {
+    for (let i = 0; i < ids.length; i += concurrency) {
+      const batch = ids.slice(i, i + concurrency);
+      const results = await Promise.all(
+        batch.map(async ({ messageId }) => {
         const res = await gmail.users.messages.get({
           userId: "me",
           id: messageId,
@@ -154,6 +188,10 @@ export async function getEmailsByIds(
       }),
     );
     out.push(...results);
+    }
+  } catch (err) {
+    if (isGmailAuthError(err)) throw new GmailAuthError();
+    throw err;
   }
   return out;
 }
@@ -220,6 +258,12 @@ export async function getEmailsByIdsLenient(
               },
             };
           } catch (err) {
+            // Auth errors aren't lenient — if this row's call hit 401 /
+            // invalid_grant, the whole user's batch will too (same token).
+            // Re-throw as a typed GmailAuthError so the route catches it
+            // once and marks the user, instead of returning N "error"
+            // outcomes that don't carry the reauth signal.
+            if (isGmailAuthError(err)) throw new GmailAuthError();
             const e = err as {
               code?: number;
               status?: number;

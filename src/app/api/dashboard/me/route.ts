@@ -22,14 +22,14 @@ export async function GET(req: NextRequest) {
   const supabase = makeSupabaseServerClient();
   const { data: row, error } = await supabase
     .from("users")
-    .select("last_ingested_at")
+    .select("last_ingested_at, gmail_reauth_needed, gmail_reauth_needed_at")
     .eq("id", supabaseUserId)
     .single();
   // Log but don't fail the request — a missing read just falls back to null,
   // which the dashboard treats as "brand-new user, auto-trigger first ingest."
   // Without the log we can't distinguish a real DB error from that path.
   if (error) {
-    console.error("[dashboard/me] last_ingested_at select failed", {
+    console.error("[dashboard/me] users select failed", {
       supabaseUserId,
       message: error.message,
     });
@@ -39,5 +39,7 @@ export async function GET(req: NextRequest) {
     supabaseUserId,
     email,
     lastIngestedAt: row?.last_ingested_at ?? null,
+    gmailReauthNeeded: row?.gmail_reauth_needed ?? false,
+    gmailReauthNeededAt: row?.gmail_reauth_needed_at ?? null,
   });
 }

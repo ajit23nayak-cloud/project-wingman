@@ -3,10 +3,15 @@ import { makeSupabaseServerClient } from "@/lib/supabase/server";
 import { getGoogleAccessToken } from "@/lib/clerk";
 import {
   getEmailsByIdsLenient,
+  GmailAuthError,
   type EmailIdRef,
   type LenientFetchOutcome,
 } from "@/lib/gmail";
 import { BODY_FETCH_CHUNK_SIZE } from "@/lib/limits";
+import {
+  markGmailReauthNeeded,
+  clearGmailReauthFlag,
+} from "@/lib/auth/gmailReauth";
 
 // POST /api/cron/fetch-bodies
 //
@@ -181,6 +186,7 @@ export async function POST(req: NextRequest) {
         error_code: "clerk_sdk_threw",
         detail,
       });
+      await markGmailReauthNeeded(supabase, userId);
       summary.skippedNoToken += rows.length;
       continue;
     }
@@ -193,6 +199,7 @@ export async function POST(req: NextRequest) {
         stage: "token",
         error_code: "no_google_token",
       });
+      await markGmailReauthNeeded(supabase, userId);
       summary.skippedNoToken += rows.length;
       continue;
     }
@@ -211,21 +218,32 @@ export async function POST(req: NextRequest) {
       outcomes = await getEmailsByIdsLenient(token, ids, 5);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
+      const isAuth = err instanceof GmailAuthError;
       console.error("[fetch-bodies:fetch] batch threw", {
         userId,
         message: detail,
+        isAuth,
       });
       runs.push({
         job_name: JOB_NAME,
         ok: false,
         user_id: userId,
         stage: "fetch",
-        error_code: "gmail_batch_threw",
+        error_code: isAuth ? "gmail_auth_failed" : "gmail_batch_threw",
         detail,
       });
-      summary.transientErrors += rows.length;
+      if (isAuth) {
+        await markGmailReauthNeeded(supabase, userId);
+        summary.skippedNoToken += rows.length;
+      } else {
+        summary.transientErrors += rows.length;
+      }
       continue;
     }
+    // Per-user batch returned successfully — Gmail OAuth is valid for this
+    // user. Self-heal the flag (strategy ii) so out-of-band reconnects don't
+    // leave a stale banner.
+    await clearGmailReauthFlag(supabase, userId);
 
     // -- map per-row outcome → UPDATE --
     // Match outcomes back to claimed rows by gmail_message_id so we know

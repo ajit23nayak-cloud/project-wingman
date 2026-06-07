@@ -22,10 +22,19 @@ export function useSupabaseBrowser() {
 
 // --- /api/dashboard/me ------------------------------------------------------
 
+// Pinned response shape from /api/dashboard/me, observed empirically against
+// src/app/api/dashboard/me/route.ts. The route returns ALL of these keys on
+// every successful response — lastIngestedAt and gmailReauthNeededAt are
+// nullable (brand-new user before first ingest; flag never set), but the
+// other three are always present strings/booleans. When the API contract
+// changes, update this type AND the comment. Per CONVENTIONS.md "Pin the
+// observed shape as a code comment."
 export type MeData = {
   supabaseUserId: string;
   email: string;
   lastIngestedAt: number | null;
+  gmailReauthNeeded: boolean;
+  gmailReauthNeededAt: string | null;
 };
 
 export function useMe() {
@@ -34,6 +43,27 @@ export function useMe() {
     if (!res.ok) throw new Error(`me_fetch_${res.status}`);
     return res.json();
   });
+}
+
+// --- clear-reauth-flag ------------------------------------------------------
+
+// POSTs /api/dashboard/clear-reauth-flag, then revalidates useMe so the
+// dashboard banner disappears immediately. Called from the /account page's
+// Done button after the user reconnects Gmail.
+export function useClearReauthFlag() {
+  const { mutate } = useSWRConfig();
+  return async (): Promise<{ ok: boolean }> => {
+    try {
+      const res = await fetch("/api/dashboard/clear-reauth-flag", {
+        method: "POST",
+      });
+      if (!res.ok) return { ok: false };
+      mutate("/api/dashboard/me");
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  };
 }
 
 // --- email_counts RPC -------------------------------------------------------

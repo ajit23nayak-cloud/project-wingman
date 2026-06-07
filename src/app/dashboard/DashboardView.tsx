@@ -6,6 +6,7 @@
 // ingest route then invalidates the keys above.
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUser, UserButton } from "@clerk/nextjs";
 import {
@@ -168,6 +169,36 @@ export function DashboardView() {
           <UserButton />
         </div>
       </header>
+
+      {me?.gmailReauthNeeded && (
+        <div className="max-w-4xl mx-auto mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <h3 className="font-semibold text-amber-900">
+            Your Gmail connection expired
+          </h3>
+          <p className="mt-1 text-sm text-amber-800">
+            Wingman can&apos;t reach your inbox until you reconnect. Takes 10
+            seconds.
+            {me.gmailReauthNeededAt && (
+              <>
+                {" "}
+                <span className="text-amber-700">
+                  Stopped working{" "}
+                  {formatRelativeTime(
+                    new Date(me.gmailReauthNeededAt).getTime(),
+                  )}
+                  .
+                </span>
+              </>
+            )}
+          </p>
+          <Link
+            href="/account"
+            className="mt-3 inline-block rounded-md bg-amber-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800"
+          >
+            Reconnect Gmail
+          </Link>
+        </div>
+      )}
 
       <section className="max-w-4xl mx-auto mt-10">
         <h2 className="text-2xl font-semibold">Welcome, {firstName}.</h2>

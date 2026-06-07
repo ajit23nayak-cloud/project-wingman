@@ -5,9 +5,14 @@ import { getGoogleAccessToken } from "@/lib/clerk";
 import {
   listInboxIdsLastNDays,
   getEmailsByIds,
+  GmailAuthError,
   type NormalizedEmail,
 } from "@/lib/gmail";
 import { makeSupabaseServerClient } from "@/lib/supabase/server";
+import {
+  markGmailReauthNeeded,
+  clearGmailReauthFlag,
+} from "@/lib/auth/gmailReauth";
 import {
   BACKFILL_EMAIL_CAP,
   FIRST_INGEST_FULL,
@@ -39,6 +44,11 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return auth.response;
   const { supabaseUserId, clerkUserId } = auth.user;
 
+  // Constructed here (not just-in-time on insert as before) because the
+  // gmail_reauth_needed flag-marking calls below need a supabase client
+  // even when we bail out early on token failures.
+  const supabase = makeSupabaseServerClient();
+
   // --- Gmail access token ---------------------------------------------------
   let token: string | null;
   try {
@@ -48,12 +58,14 @@ export async function POST(req: NextRequest) {
       clerkUserId,
       message: err instanceof Error ? err.message : String(err),
     });
+    await markGmailReauthNeeded(supabase, supabaseUserId);
     return NextResponse.json(
       { error: "token_fetch_failed" },
       { status: 502 },
     );
   }
   if (!token) {
+    await markGmailReauthNeeded(supabase, supabaseUserId);
     return NextResponse.json({ error: "no_google_token" }, { status: 412 });
   }
 
@@ -70,11 +82,21 @@ export async function POST(req: NextRequest) {
       clerkUserId,
       message: err instanceof Error ? err.message : String(err),
     });
+    if (err instanceof GmailAuthError) {
+      await markGmailReauthNeeded(supabase, supabaseUserId);
+      return NextResponse.json(
+        { error: "gmail_auth_failed" },
+        { status: 412 },
+      );
+    }
     return NextResponse.json(
       { error: "gmail_list_failed" },
       { status: 502 },
     );
   }
+  // Listing succeeded — OAuth is valid. Auto-clear the flag (strategy ii
+  // for out-of-band reconnects via google.com/permissions).
+  await clearGmailReauthFlag(supabase, supabaseUserId);
   if (ids.length === 0) {
     console.log("[ingestEmails:done] empty inbox window", {
       userId: supabaseUserId,
@@ -105,13 +127,18 @@ export async function POST(req: NextRequest) {
       message: err instanceof Error ? err.message : String(err),
       attemptedCount: fullIds.length,
     });
+    if (err instanceof GmailAuthError) {
+      await markGmailReauthNeeded(supabase, supabaseUserId);
+      return NextResponse.json(
+        { error: "gmail_auth_failed" },
+        { status: 412 },
+      );
+    }
     return NextResponse.json(
       { error: "gmail_get_failed" },
       { status: 502 },
     );
   }
-
-  const supabase = makeSupabaseServerClient();
 
   // --- Insert fully-fetched rows (idempotent on (user_id, gmail_message_id))
   let fullInserted = 0;
