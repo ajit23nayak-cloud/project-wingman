@@ -140,6 +140,20 @@ export function DashboardView() {
     counts !== undefined &&
     counts.total > 0;
 
+  // Assessment-nudge banner. Renders when the founder hasn't taken the MH
+  // assessment AND hasn't recently/repeatedly skipped it. Per MH_UI_SPEC.md
+  // L173 + Tab 2 16:50 UTC lock: skip count maxes at 2; first skip suppresses
+  // the banner for 24h, second skip suppresses permanently (banner gone from
+  // dashboard, but /assessment is still navigable directly).
+  const SKIP_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+  const showAssessmentBanner =
+    me !== undefined &&
+    me.mhStyle === null &&
+    me.mhAssessmentSkipCount < 2 &&
+    (me.mhAssessmentSkippedAt === null ||
+      Date.now() - new Date(me.mhAssessmentSkippedAt).getTime() >
+        SKIP_COOLDOWN_MS);
+
   const runIngest = async (isAuto: boolean) => {
     setIsIngesting(true);
     setIngestError(null);
@@ -261,6 +275,28 @@ export function DashboardView() {
           <p className="mt-3 text-gray-700">
             Found {firstIngestCount} emails from the last 30 days.
           </p>
+        )}
+
+        {showAssessmentBanner && (
+          <div className="mt-6 rounded-lg border border-purple-200 bg-purple-50 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-purple-900">
+                  Personalize Wingman in 90 seconds
+                </h3>
+                <p className="mt-1 text-sm text-purple-800">
+                  Six quick questions so the reflection prompts and nudges
+                  match how you actually think.
+                </p>
+              </div>
+              <Link
+                href="/assessment"
+                className="rounded-md bg-purple-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-800 shrink-0"
+              >
+                Start
+              </Link>
+            </div>
+          </div>
         )}
 
         {showOnboardingBanner && (

@@ -22,7 +22,9 @@ export async function GET(req: NextRequest) {
   const supabase = makeSupabaseServerClient();
   const { data: row, error } = await supabase
     .from("users")
-    .select("last_ingested_at, gmail_reauth_needed, gmail_reauth_needed_at")
+    .select(
+      "last_ingested_at, gmail_reauth_needed, gmail_reauth_needed_at, mh_style, mh_storage_tier, mh_assessment_skipped_at, mh_assessment_skip_count",
+    )
     .eq("id", supabaseUserId)
     .single();
   // Log but don't fail the request — a missing read just falls back to null,
@@ -41,5 +43,9 @@ export async function GET(req: NextRequest) {
     lastIngestedAt: row?.last_ingested_at ?? null,
     gmailReauthNeeded: row?.gmail_reauth_needed ?? false,
     gmailReauthNeededAt: row?.gmail_reauth_needed_at ?? null,
+    mhStyle: row?.mh_style ?? null,
+    mhStorageTier: row?.mh_storage_tier ?? 2,
+    mhAssessmentSkippedAt: row?.mh_assessment_skipped_at ?? null,
+    mhAssessmentSkipCount: row?.mh_assessment_skip_count ?? 0,
   });
 }

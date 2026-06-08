@@ -24,17 +24,23 @@ export function useSupabaseBrowser() {
 
 // Pinned response shape from /api/dashboard/me, observed empirically against
 // src/app/api/dashboard/me/route.ts. The route returns ALL of these keys on
-// every successful response — lastIngestedAt and gmailReauthNeededAt are
-// nullable (brand-new user before first ingest; flag never set), but the
-// other three are always present strings/booleans. When the API contract
-// changes, update this type AND the comment. Per CONVENTIONS.md "Pin the
-// observed shape as a code comment."
+// every successful response — lastIngestedAt, gmailReauthNeededAt, mhStyle,
+// and mhAssessmentSkippedAt are nullable (brand-new user before first ingest;
+// flag never set; assessment not yet taken/skipped). Other fields are always
+// present. When the API contract changes, update this type AND the comment.
+// Per CONVENTIONS.md "Pin the observed shape as a code comment."
+export type MhStyle = "operational" | "state" | "inquiry";
+
 export type MeData = {
   supabaseUserId: string;
   email: string;
   lastIngestedAt: number | null;
   gmailReauthNeeded: boolean;
   gmailReauthNeededAt: string | null;
+  mhStyle: MhStyle | null;
+  mhStorageTier: 1 | 2 | 3 | 4;
+  mhAssessmentSkippedAt: string | null;
+  mhAssessmentSkipCount: number;
 };
 
 export function useMe() {
