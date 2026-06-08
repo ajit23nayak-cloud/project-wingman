@@ -198,20 +198,195 @@ export function fieldsFor(
     : EVENING_FIELDS[variant];
 }
 
-// Tier-aware payload composition. Per Tab 2 19:10 UTC lock:
+// Tier-aware payload composition. Per Tab 2 19:10 UTC lock + 20:05 UTC patch:
 //   tier 1: structured + text both NULL (just a session-occurred stamp)
 //   tier 2: structured only (chartable data), text NULL
 //   tier 3: structured + text
 //   tier 4: same writes as tier 3 (correlation engine reads, doesn't write)
 //
-// "Structured" fields = NumberField + CategoricalField. They go into
-// numeric_data jsonb. "Text" fields = TextField. They go into text_data
-// jsonb. The split is mechanical: kind of field → which column.
+// The locked shape is NOT a mechanical "dump fields by kind" — it's
+// purposeful. Specifically:
+//   - Operational morning numeric_data: { mip_energies: ['red','yellow','green'] }
+//     (single array, not three keys)
+//   - State morning numeric_data: { gratitude_count: N }
+//     (derived count, NOT the text)
+//   - Inquiry morning numeric_data: { thought_present: bool }
+//     (derived boolean from text presence)
+//   - Mixed morning numeric_data: { mip_count_filled: N }
+//     (derived count from MIP text presence)
+//   - Operational evening numeric_data also has { mip_scores: [...] } array
+//   - All evenings: { energy, focus, mood } 1-10 scores directly
+//
+// Why derived/array shape: the v1 correlation engine queries shapes like
+// `numeric_data->>'mip_count_filled' as filled`. If we stored mip_1, mip_2,
+// mip_3 as separate keys, the engine would have to know each variant's
+// field set. The locked shape gives it ONE chartable signal per variant.
+//
+// Pre-patch (Commit B initial): mechanical kind-based dump. Caught by
+// Tab 2 in browser-verification pre-flight: mixed-morning tier-2 came back
+// with both columns null because mixed has no NumberField/CategoricalField.
+// This patch restores the locked shape across all 8 variants + adds the
+// inverse decode for prefill.
 
 export type ComposedPayload = {
   numeric_data: Record<string, unknown> | null;
   text_data: Record<string, unknown> | null;
 };
+
+type RawValue = string | number | undefined;
+
+function strOrUndef(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+function numOrUndef(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function nonEmpty(strs: (string | undefined)[]): string[] {
+  return strs.filter(
+    (s): s is string => typeof s === "string" && s.trim().length > 0,
+  );
+}
+
+function composeNumericMorning(
+  variant: RitualVariant,
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  if (variant === "operational") {
+    // Filter to non-empty energies (preserves null slots if some unfilled
+    // would distort the array; the v0 user fills all 3 or none).
+    const energies = nonEmpty([
+      strOrUndef(raw.mip_energy_1),
+      strOrUndef(raw.mip_energy_2),
+      strOrUndef(raw.mip_energy_3),
+    ]);
+    return energies.length > 0 ? { mip_energies: energies } : {};
+  }
+  if (variant === "state") {
+    const gratitudeCount = nonEmpty([
+      strOrUndef(raw.gratitude_1),
+      strOrUndef(raw.gratitude_2),
+      strOrUndef(raw.gratitude_3),
+    ]).length;
+    return gratitudeCount > 0 ? { gratitude_count: gratitudeCount } : {};
+  }
+  if (variant === "inquiry") {
+    const thought = strOrUndef(raw.thought);
+    return {
+      thought_present: !!(thought && thought.trim().length > 0),
+    };
+  }
+  // mixed
+  const mipCountFilled = nonEmpty([
+    strOrUndef(raw.mip_1),
+    strOrUndef(raw.mip_2),
+    strOrUndef(raw.mip_3),
+  ]).length;
+  return mipCountFilled > 0 ? { mip_count_filled: mipCountFilled } : {};
+}
+
+function composeNumericEvening(
+  variant: RitualVariant,
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const e = numOrUndef(raw.energy);
+  const f = numOrUndef(raw.focus);
+  const m = numOrUndef(raw.mood);
+  if (e !== undefined) out.energy = e;
+  if (f !== undefined) out.focus = f;
+  if (m !== undefined) out.mood = m;
+  if (variant === "operational") {
+    const scores = nonEmpty([
+      strOrUndef(raw.mip_score_1),
+      strOrUndef(raw.mip_score_2),
+      strOrUndef(raw.mip_score_3),
+    ]);
+    if (scores.length > 0) out.mip_scores = scores;
+  }
+  return out;
+}
+
+function composeTextMorning(
+  variant: RitualVariant,
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (variant === "operational") {
+    const mips = nonEmpty([
+      strOrUndef(raw.mip_1),
+      strOrUndef(raw.mip_2),
+      strOrUndef(raw.mip_3),
+    ]);
+    if (mips.length > 0) out.mips = mips;
+    const intention = strOrUndef(raw.intention);
+    if (intention) out.intention = intention;
+    return out;
+  }
+  if (variant === "state") {
+    const gratitudes = nonEmpty([
+      strOrUndef(raw.gratitude_1),
+      strOrUndef(raw.gratitude_2),
+      strOrUndef(raw.gratitude_3),
+    ]);
+    if (gratitudes.length > 0) out.gratitudes = gratitudes;
+    for (const k of ["priming_answer", "focus", "meaning"] as const) {
+      const v = strOrUndef(raw[k]);
+      if (v) out[k] = v;
+    }
+    return out;
+  }
+  if (variant === "inquiry") {
+    for (const k of ["thought", "q1", "q2", "q3", "q4", "turnaround"] as const) {
+      const v = strOrUndef(raw[k]);
+      if (v) out[k] = v;
+    }
+    return out;
+  }
+  // mixed
+  const mips = nonEmpty([
+    strOrUndef(raw.mip_1),
+    strOrUndef(raw.mip_2),
+    strOrUndef(raw.mip_3),
+  ]);
+  if (mips.length > 0) out.mips = mips;
+  const priming = strOrUndef(raw.priming_answer);
+  if (priming) out.priming_answer = priming;
+  return out;
+}
+
+function composeTextEvening(
+  variant: RitualVariant,
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (variant === "operational") {
+    const anyElse = strOrUndef(raw.anything_else);
+    if (anyElse) out.anything_else = anyElse;
+    return out;
+  }
+  if (variant === "state") {
+    for (const k of ["state_slip", "anything_else"] as const) {
+      const v = strOrUndef(raw[k]);
+      if (v) out[k] = v;
+    }
+    return out;
+  }
+  if (variant === "inquiry") {
+    for (const k of ["stressful_thought_today", "anything_else"] as const) {
+      const v = strOrUndef(raw[k]);
+      if (v) out[k] = v;
+    }
+    return out;
+  }
+  // mixed
+  for (const k of ["stressful_thought", "state_shift", "anything_else"] as const) {
+    const v = strOrUndef(raw[k]);
+    if (v) out[k] = v;
+  }
+  return out;
+}
 
 export function composePayload(
   tier: StorageTier,
@@ -223,25 +398,95 @@ export function composePayload(
     return { numeric_data: null, text_data: null };
   }
 
-  const fields = fieldsFor(variant, type);
-  const numericData: Record<string, unknown> = {};
-  const textData: Record<string, unknown> = {};
+  const numeric =
+    type === "morning_ritual"
+      ? composeNumericMorning(variant, raw)
+      : composeNumericEvening(variant, raw);
 
-  for (const field of fields) {
-    const value = raw[field.key];
-    if (value === undefined || value === null || value === "") continue;
-
-    if (field.kind === "text") {
-      if (tier >= 3) textData[field.key] = value;
-    } else {
-      numericData[field.key] = value;
-    }
-  }
+  const text =
+    tier >= 3
+      ? type === "morning_ritual"
+        ? composeTextMorning(variant, raw)
+        : composeTextEvening(variant, raw)
+      : null;
 
   return {
-    numeric_data: Object.keys(numericData).length > 0 ? numericData : null,
-    text_data: Object.keys(textData).length > 0 ? textData : null,
+    numeric_data: Object.keys(numeric).length > 0 ? numeric : null,
+    text_data: text && Object.keys(text).length > 0 ? text : null,
   };
+}
+
+// Inverse of composePayload — takes the stored locked shape and produces a
+// flat key/value map keyed by form field names (mip_energy_1/2/3, gratitude_1
+// /2/3, etc.). Used by /daily for prefill: server stores `mip_energies:
+// [...]`, form expects individual keys, decode bridges the two.
+//
+// If we ever rename a locked-shape key in numeric_data or text_data, the
+// matching unpacking line here changes too. Keep them in lockstep.
+export function decomposeFromStorage(
+  numericData: Record<string, unknown> | null,
+  textData: Record<string, unknown> | null,
+): Record<string, RawValue> {
+  const n = numericData ?? {};
+  const t = textData ?? {};
+  const out: Record<string, RawValue> = {};
+
+  // Arrays from numeric_data → individual indexed keys.
+  if (Array.isArray(n.mip_energies)) {
+    n.mip_energies.forEach((v, i) => {
+      if (typeof v === "string") out[`mip_energy_${i + 1}`] = v;
+    });
+  }
+  if (Array.isArray(n.mip_scores)) {
+    n.mip_scores.forEach((v, i) => {
+      if (typeof v === "string") out[`mip_score_${i + 1}`] = v;
+    });
+  }
+
+  // Scalar numeric scores (evening) pass through directly.
+  for (const k of ["energy", "focus", "mood"]) {
+    if (typeof n[k] === "number") out[k] = n[k] as number;
+  }
+
+  // Derived signals (gratitude_count / thought_present / mip_count_filled)
+  // are NOT decoded into form fields — they're write-only chartables.
+
+  // Arrays from text_data → individual indexed keys.
+  if (Array.isArray(t.mips)) {
+    t.mips.forEach((v, i) => {
+      if (typeof v === "string") out[`mip_${i + 1}`] = v;
+    });
+  }
+  if (Array.isArray(t.gratitudes)) {
+    t.gratitudes.forEach((v, i) => {
+      if (typeof v === "string") out[`gratitude_${i + 1}`] = v;
+    });
+  }
+
+  // Scalar text fields pass through (intention, priming_answer, focus,
+  // meaning, thought, q1-q4, turnaround, state_slip, stressful_thought*,
+  // state_shift, anything_else).
+  for (const k of [
+    "intention",
+    "priming_answer",
+    "focus",
+    "meaning",
+    "thought",
+    "q1",
+    "q2",
+    "q3",
+    "q4",
+    "turnaround",
+    "state_slip",
+    "stressful_thought_today",
+    "stressful_thought",
+    "state_shift",
+    "anything_else",
+  ]) {
+    if (typeof t[k] === "string") out[k] = t[k] as string;
+  }
+
+  return out;
 }
 
 // Server-side validation. Refuses any field that doesn't match its declared

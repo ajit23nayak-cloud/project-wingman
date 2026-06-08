@@ -22,6 +22,7 @@ import {
   type RitualSession,
 } from "@/lib/supabase/hooks";
 import {
+  decomposeFromStorage,
   fieldsFor,
   variantFor,
   type RitualField,
@@ -33,16 +34,7 @@ type FieldValues = Record<string, string | number | undefined>;
 
 function extractPrefill(session: RitualSession | null): FieldValues {
   if (!session) return {};
-  const fromNumeric = (session.numeric_data ?? {}) as Record<string, unknown>;
-  const fromText = (session.text_data ?? {}) as Record<string, unknown>;
-  const merged: FieldValues = {};
-  for (const [k, v] of Object.entries(fromNumeric)) {
-    if (typeof v === "number" || typeof v === "string") merged[k] = v;
-  }
-  for (const [k, v] of Object.entries(fromText)) {
-    if (typeof v === "string") merged[k] = v;
-  }
-  return merged;
+  return decomposeFromStorage(session.numeric_data, session.text_data);
 }
 
 function FieldRow({
