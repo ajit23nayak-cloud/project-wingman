@@ -25,6 +25,28 @@ import {
 
 const ONBOARDING_DISMISS_KEY = "wingman_onboarding_dismissed";
 
+// Small inline icon for the Settings link in the user-avatar dropdown.
+// Clerk's UserButton.Link requires a labelIcon prop; reusing a simple SVG
+// rather than pulling in an icon library for one glyph.
+function SettingsIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
 // Per-filter copy for the empty list state. "No emails in this view" was the
 // pre-onboarding-polish text — these replacements give each filter a
 // reassuring, specific message per sprint-strategy.md section 2 friction
@@ -251,7 +273,15 @@ export function DashboardView() {
           >
             {isIngesting ? "Refreshing..." : "Refresh inbox"}
           </button>
-          <UserButton />
+          <UserButton>
+            <UserButton.MenuItems>
+              <UserButton.Link
+                label="Settings"
+                labelIcon={<SettingsIcon />}
+                href="/settings"
+              />
+            </UserButton.MenuItems>
+          </UserButton>
         </div>
       </header>
 

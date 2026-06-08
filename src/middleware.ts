@@ -7,6 +7,7 @@ const isProtectedRoute = createRouteMatcher([
   "/account(.*)",
   "/assessment(.*)",
   "/daily(.*)",
+  "/settings(.*)",
 ]);
 const isLandingRoute = createRouteMatcher(["/"]);
 

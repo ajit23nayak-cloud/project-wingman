@@ -363,6 +363,77 @@ export function useStreak() {
   );
 }
 
+// --- storage tier preview + change ------------------------------------------
+
+export type StorageTierPreview = {
+  currentTier: 1 | 2 | 3 | 4;
+  newTier: 1 | 2 | 3 | 4;
+  isDowngrade: boolean;
+  textToBeNulled: number;
+  numericToBeNulled: number;
+  correlationsToBeDeleted: number;
+};
+
+// One-shot preview fetch — call inside the confirm modal when it opens.
+// Not an SWR subscription (the modal is short-lived). Returns null on auth
+// failure or invalid newTier; caller treats null as "skip the modal."
+export function useStorageTierPreview() {
+  return async (newTier: 1 | 2 | 3 | 4): Promise<StorageTierPreview | null> => {
+    try {
+      const res = await fetch(`/api/me/storage_tier/preview?newTier=${newTier}`);
+      if (!res.ok) return null;
+      return (await res.json()) as StorageTierPreview;
+    } catch {
+      return null;
+    }
+  };
+}
+
+export function useUpdateStorageTier() {
+  const { mutate } = useSWRConfig();
+  return async (
+    newTier: 1 | 2 | 3 | 4,
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    cleanup?: {
+      textNulled: number;
+      numericNulled: number;
+      correlationsDeleted: number;
+    };
+  }> => {
+    try {
+      const res = await fetch("/api/me/storage_tier", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newTier }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        // Invalidate dependent caches per Tab 2 Flag D lock.
+        await mutate("/api/dashboard/me");
+        await mutate(
+          (key) =>
+            Array.isArray(key) &&
+            (key[0] === "recent_rituals" || key[0] === "email_counts"),
+        );
+        // Today's ritual prefill may now be stale if text_data was nulled.
+        await mutate("/api/mh/ritual/today");
+        return {
+          ok: true,
+          cleanup: data.cleanupApplied,
+        };
+      }
+      return { ok: false, error: data.error ?? `tier_${res.status}` };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
 // --- on-demand "Help me think" ----------------------------------------------
 
 // Persist a complete on-demand session (one of 4 routes). For chat sessions,
