@@ -12,8 +12,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useSWRConfig } from "swr";
 import {
   ASSESSMENT_QUESTIONS,
   type Framework,
@@ -47,9 +45,6 @@ function buildRankingsPayload(answers: AnswerState): QuestionRanking[] {
 }
 
 export function AssessmentView() {
-  const router = useRouter();
-  const { mutate } = useSWRConfig();
-
   const [qIndex, setQIndex] = useState(0);
   const [answers, setAnswers] = useState<AnswerState>({});
   const [submitting, setSubmitting] = useState(false);
@@ -93,6 +88,17 @@ export function AssessmentView() {
     setQIndex((i) => Math.max(0, i - 1));
   };
 
+  // Why `window.location.href` instead of router.push + mutate: Tab 2's
+  // 17:35 UTC log entry caught a stale-cache bug on /assessment →
+  // /dashboard nav — the original mutate+push pattern (same shape as the
+  // f0ab301 OAuth re-auth fix) didn't actually refresh the dashboard's
+  // useMe on sibling-route soft nav. Hard nav forces a full page mount,
+  // useMe re-fetches from scratch, banner state reflects the just-written
+  // mh_style or mh_assessment_skipped_at. Trade-off: a tiny flash of full
+  // page reload vs. a stale banner that needs a manual refresh to clear.
+  // We pick the reload — losing the banner-still-there UX bug is more
+  // important than the SPA-feel of soft nav for a once-or-twice-per-user
+  // flow.
   const handleSubmit = async () => {
     setSubmitting(true);
     setError(null);
@@ -108,9 +114,7 @@ export function AssessmentView() {
         setSubmitting(false);
         return;
       }
-      // Invalidate useMe so the dashboard reads the new mhStyle.
-      await mutate("/api/dashboard/me");
-      router.push("/dashboard");
+      window.location.href = "/dashboard";
     } catch {
       setError("network_error");
       setSubmitting(false);
@@ -127,8 +131,7 @@ export function AssessmentView() {
         setSkipping(false);
         return;
       }
-      await mutate("/api/dashboard/me");
-      router.push("/dashboard");
+      window.location.href = "/dashboard";
     } catch {
       setError("network_error");
       setSkipping(false);
