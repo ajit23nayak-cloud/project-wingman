@@ -14,10 +14,25 @@ import {
   useCounts,
   useEmails,
   useTriggerIngest,
+  useDraftCount,
   type Counts,
   type FilterValue,
   type EmailRow,
 } from "@/lib/supabase/hooks";
+
+const ONBOARDING_DISMISS_KEY = "wingman_onboarding_dismissed";
+
+// Per-filter copy for the empty list state. "No emails in this view" was the
+// pre-onboarding-polish text — these replacements give each filter a
+// reassuring, specific message per sprint-strategy.md section 2 friction
+// point "Empty bucket messaging when Urgent = 0."
+const EMPTY_BUCKET_COPY: Record<FilterValue, string> = {
+  all: "No emails ingested yet — try Refresh inbox.",
+  urgent: "0 urgent emails right now. Looking calm — enjoy the breather.",
+  important: "Nothing important needs your attention right now.",
+  fyi: "No FYI items in view.",
+  archive: "No archived emails yet.",
+};
 
 const PAGE_SIZE = 50;
 
@@ -91,6 +106,7 @@ export function DashboardView() {
 
   const { data: me, error: meError } = useMe();
   const { data: counts, error: countsError } = useCounts();
+  const { data: draftCount } = useDraftCount();
   const emailsHook = useEmails(filter, PAGE_SIZE);
 
   const triggerIngest = useTriggerIngest();
@@ -99,6 +115,30 @@ export function DashboardView() {
   const [firstIngestCount, setFirstIngestCount] = useState<number | null>(null);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const autoTriggeredRef = useRef(false);
+
+  // Onboarding banner state — show if user has generated 0 drafts AND
+  // hasn't dismissed via localStorage. Effect reads localStorage on mount
+  // to avoid SSR hydration mismatch. Once draftCount > 0, the banner
+  // hides naturally (without needing to write the dismiss flag).
+  const [bannerDismissed, setBannerDismissed] = useState(true);
+  useEffect(() => {
+    setBannerDismissed(
+      typeof window !== "undefined" &&
+        window.localStorage.getItem(ONBOARDING_DISMISS_KEY) === "1",
+    );
+  }, []);
+  const handleDismissBanner = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ONBOARDING_DISMISS_KEY, "1");
+    }
+    setBannerDismissed(true);
+  };
+  const showOnboardingBanner =
+    !bannerDismissed &&
+    draftCount !== undefined &&
+    draftCount === 0 &&
+    counts !== undefined &&
+    counts.total > 0;
 
   const runIngest = async (isAuto: boolean) => {
     setIsIngesting(true);
@@ -204,13 +244,46 @@ export function DashboardView() {
         <h2 className="text-2xl font-semibold">Welcome, {firstName}.</h2>
 
         {isIngesting && firstIngestCount === null && (
-          <p className="mt-3 text-gray-600">Connecting to your inbox...</p>
+          <div className="mt-3 flex items-center gap-3">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700" />
+            <div>
+              <p className="text-gray-700 text-sm">
+                Reading your last 30 days of email…
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Usually takes 30–90 seconds.
+              </p>
+            </div>
+          </div>
         )}
 
         {firstIngestCount !== null && !isIngesting && (
           <p className="mt-3 text-gray-700">
             Found {firstIngestCount} emails from the last 30 days.
           </p>
+        )}
+
+        {showOnboardingBanner && (
+          <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-blue-900">
+                  👋 We&apos;ve classified your inbox.
+                </h3>
+                <p className="mt-1 text-sm text-blue-800">
+                  Try generating your first draft reply — click any Urgent or
+                  Important email below.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleDismissBanner}
+                className="text-xs text-blue-700 hover:text-blue-900 underline shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
         )}
 
         {ingestError && (
@@ -285,7 +358,7 @@ export function DashboardView() {
         ) : loadingFirstPage ? (
           <p className="text-gray-500 text-sm">Loading...</p>
         ) : emails.length === 0 ? (
-          <p className="text-gray-500 text-sm">No emails in this view.</p>
+          <p className="text-gray-500 text-sm">{EMPTY_BUCKET_COPY[filter]}</p>
         ) : (
           <>
             <ul className="divide-y divide-gray-200 border-y border-gray-200">

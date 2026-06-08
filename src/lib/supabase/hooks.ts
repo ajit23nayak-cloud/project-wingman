@@ -312,6 +312,27 @@ export function useEmailBody(emailId: string) {
   );
 }
 
+// --- drafts count -----------------------------------------------------------
+
+// Returns the total drafts count for the current user (RLS-scoped). Used by
+// the dashboard's first-run "Get started" banner — banner hides as soon as
+// the user has generated at least one draft. Cheap: PostgREST `count: exact,
+// head: true` returns the number without the rows.
+export function useDraftCount() {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<number>(
+    me ? ["drafts_count", me.supabaseUserId] : null,
+    async () => {
+      const { count, error } = await supabase
+        .from("drafts")
+        .select("id", { count: "exact", head: true });
+      if (error) throw new Error(error.message);
+      return count ?? 0;
+    },
+  );
+}
+
 // --- emails (paginated) -----------------------------------------------------
 
 export type EmailRow = {
