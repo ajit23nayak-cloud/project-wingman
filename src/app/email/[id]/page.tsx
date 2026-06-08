@@ -1,5 +1,4 @@
 import { EmailDetailView } from "./EmailDetailView";
-import { Id } from "../../../../convex/_generated/dataModel";
 
 export default async function EmailDetailPage({
   params,
@@ -7,5 +6,5 @@ export default async function EmailDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <EmailDetailView emailId={id as Id<"emails">} />;
+  return <EmailDetailView emailId={id} />;
 }

@@ -110,6 +110,88 @@ export function useCounts() {
   );
 }
 
+// --- single email + draft ---------------------------------------------------
+
+// Pinned response shape from `supabase.from('emails').select('*, drafts(*)')
+// .eq('id', id).single()`, observed empirically. The `drafts` field is a
+// SINGLE OBJECT OR NULL because drafts.email_id has a UNIQUE constraint —
+// PostgREST treats it as one-to-one. Per CONVENTIONS.md "Pin the observed
+// shape as a code comment" (the canonical case study for this rule).
+//
+// Fields included match what /email/[id] EmailDetailView actually reads —
+// extending the SELECT later requires updating both the query string in
+// useEmail() AND this type.
+export type EmailDetail = {
+  id: string;
+  gmail_message_id: string;
+  thread_id: string;
+  from_address: string;
+  to_addresses: string[];
+  subject: string;
+  snippet: string;
+  received_at: number;
+  classification: "urgent" | "important" | "fyi" | "archive" | null;
+  classification_reason: string | null;
+  classification_error: string | null;
+  status: "pending" | "processed" | "failed";
+  drafts: DraftRow | null;
+};
+
+export type DraftRow = {
+  id: string;
+  body: string;
+  generated_at: number;
+  edited_at: number | null;
+  status: "unsent" | "sent";
+  reply_message_id: string | null;
+  replied_at: number | null;
+  segment_used: string | null;
+};
+
+export function useEmail(emailId: string) {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<EmailDetail | null>(
+    me ? ["email", emailId, me.supabaseUserId] : null,
+    async () => {
+      const { data, error } = await supabase
+        .from("emails")
+        .select(
+          "id, gmail_message_id, thread_id, from_address, to_addresses, subject, snippet, received_at, classification, classification_reason, classification_error, status, drafts(id, body, generated_at, edited_at, status, reply_message_id, replied_at, segment_used)",
+        )
+        .eq("id", emailId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (data as unknown as EmailDetail) ?? null;
+    },
+  );
+}
+
+// Pinned shape from /api/emails/[id]/body: always returns { bodyText: string,
+// error?: string }. bodyText is non-null even on error (falls back to the
+// snippet). error code is one of: token_fetch_failed, no_google_token,
+// gmail_auth_failed, gmail_fetch_failed, email_not_found, lookup_failed.
+export type EmailBodyResponse = {
+  bodyText: string;
+  error?: string;
+};
+
+export function useEmailBody(emailId: string) {
+  const { data: me } = useMe();
+  return useSWR<EmailBodyResponse>(
+    me ? `/api/emails/${emailId}/body` : null,
+    async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok && res.status !== 404) {
+        // 404 returns a usable body in the JSON; only other failures throw.
+        const txt = await res.text();
+        throw new Error(`body_fetch_${res.status}: ${txt.slice(0, 100)}`);
+      }
+      return res.json();
+    },
+  );
+}
+
 // --- emails (paginated) -----------------------------------------------------
 
 export type EmailRow = {

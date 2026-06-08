@@ -298,7 +298,8 @@ export function DashboardView() {
                 const fade = isArchive || isSent;
                 return (
                   <li key={email.id}>
-                    <div
+                    <Link
+                      href={`/email/${email.id}`}
                       className={`block py-3 px-2 -mx-2 hover:bg-gray-50 ${fade ? "opacity-60" : ""}`}
                     >
                       <div className="flex justify-between items-baseline gap-3">
@@ -340,7 +341,7 @@ export function DashboardView() {
                           {email.classification_reason}
                         </div>
                       )}
-                    </div>
+                    </Link>
                   </li>
                 );
               })}

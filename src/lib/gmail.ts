@@ -359,10 +359,15 @@ export async function getMessageBody(
   gmailMessageId: string,
 ): Promise<{ bodyText: string; bodyHtml: string }> {
   const gmail = getGmailClient(accessToken);
-  const res = await gmail.users.messages.get({
-    userId: "me",
-    id: gmailMessageId,
-    format: "full",
-  });
-  return extractBodies(res.data.payload);
+  try {
+    const res = await gmail.users.messages.get({
+      userId: "me",
+      id: gmailMessageId,
+      format: "full",
+    });
+    return extractBodies(res.data.payload);
+  } catch (err) {
+    if (isGmailAuthError(err)) throw new GmailAuthError();
+    throw err;
+  }
 }
