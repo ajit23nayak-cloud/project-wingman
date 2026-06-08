@@ -38,11 +38,25 @@ export type MeData = {
 };
 
 export function useMe() {
-  return useSWR<MeData>("/api/dashboard/me", async (url: string) => {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`me_fetch_${res.status}`);
-    return res.json();
-  });
+  return useSWR<MeData>(
+    "/api/dashboard/me",
+    async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`me_fetch_${res.status}`);
+      return res.json();
+    },
+    {
+      // After /account → Done → clearReauthFlag → router.push('/dashboard'),
+      // SWR was re-rendering cached me-with-flag-true even though DB had
+      // cleared (the in-flight mutate completed but the dashboard didn't
+      // resubscribe to the new cache value on remount). Forcing
+      // revalidateOnMount guarantees any server-side state change (flag
+      // toggles, last_ingested_at bumps, anything route handlers write)
+      // reflects on the next dashboard visit. Cost: one extra GET per
+      // mount, fine for a small JSON endpoint.
+      revalidateOnMount: true,
+    },
+  );
 }
 
 // --- clear-reauth-flag ------------------------------------------------------
