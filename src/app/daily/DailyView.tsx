@@ -13,7 +13,7 @@
 // time or editing your earlier entry — both flows render this form with
 // today's existing answers prefilled.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   useMe,
@@ -140,27 +140,7 @@ function RitualCard({
   onSubmitted: () => void;
 }) {
   const fields = useMemo(() => fieldsFor(variant, type), [variant, type]);
-
-  // One-time hydration from prefill. The previous `useState(prefill)` only
-  // read the prop on first mount, but DailyView's parent SWR fetch resolves
-  // AFTER mount — so empty prefill at t=0 stuck around even when today.data
-  // arrived at t=N. Tab 2 caught this in browser-verify (20:30 patch
-  // round): saved morning rows rendered as empty forms on /daily revisit,
-  // breaking the "edit your earlier entry" UX.
-  //
-  // Pattern: lazy useState seeded from prefill (so cache-hit mounts render
-  // with data already in state, no flicker), plus a useRef guard so once
-  // we've hydrated we never overwrite user edits with a re-incoming prefill
-  // (which would happen if SWR revalidates mid-typing).
-  const [values, setValues] = useState<FieldValues>(() => prefill);
-  const hydratedRef = useRef(Object.keys(prefill).length > 0);
-  useEffect(() => {
-    if (hydratedRef.current) return;
-    if (Object.keys(prefill).length === 0) return;
-    setValues(prefill);
-    hydratedRef.current = true;
-  }, [prefill]);
-
+  const [values, setValues] = useState<FieldValues>(prefill);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
