@@ -363,6 +363,75 @@ export function useStreak() {
   );
 }
 
+// --- on-demand "Help me think" ----------------------------------------------
+
+// Persist a complete on-demand session (one of 4 routes). For chat sessions,
+// the client accumulates transcript locally and posts the final transcript
+// here at session-end. For deterministic routes (OPA / Katie / energy), the
+// client posts after form submit.
+export function useSaveOnDemand() {
+  return async (
+    route: "decision" | "inquiry" | "drained" | "other",
+    raw: Record<string, unknown>,
+  ): Promise<{ ok: boolean; sessionId?: string; error?: string }> => {
+    try {
+      const res = await fetch("/api/mh/on_demand", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ route, raw }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        return { ok: true, sessionId: data.sessionId };
+      }
+      return { ok: false, error: data.error ?? `save_${res.status}` };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+// One LLM turn for chat fallback. Client sends transcript ending in user
+// message; server returns assistant response. Stateless per-turn — no DB
+// write here (final transcript persisted via useSaveOnDemand at session-end).
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+
+export function useChatTurn() {
+  return async (
+    transcript: ChatMessage[],
+  ): Promise<{
+    ok: boolean;
+    assistantMessage?: string;
+    turnsUsed?: number;
+    error?: string;
+  }> => {
+    try {
+      const res = await fetch("/api/mh/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        return {
+          ok: true,
+          assistantMessage: data.assistantMessage,
+          turnsUsed: data.turnsUsed,
+        };
+      }
+      return { ok: false, error: data.error ?? `chat_${res.status}` };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
 // --- recent rituals (for missed-ritual nudge trigger) -----------------------
 
 // Returns the timestamp of the most recent ritual entry for this user, or

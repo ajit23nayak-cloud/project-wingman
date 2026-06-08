@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUser, UserButton } from "@clerk/nextjs";
+import { HelpMeThinkModal } from "@/app/_components/HelpMeThinkModal";
 import {
   useMe,
   useCounts,
@@ -105,6 +106,7 @@ export function DashboardView() {
   }, [isLoaded, isSignedIn, router]);
 
   const [filter, setFilter] = useState<FilterValue>("all");
+  const [helpModalOpen, setHelpModalOpen] = useState(false);
 
   const { data: me, error: meError } = useMe();
   const { data: counts, error: countsError } = useCounts();
@@ -217,6 +219,20 @@ export function DashboardView() {
       <header className="flex justify-between items-center max-w-4xl mx-auto">
         <h1 className="text-xl font-semibold">Project Wingman</h1>
         <div className="flex items-center gap-3">
+          {/* Help me think — hidden for State B (assessment never engaged).
+              State A/C/D get the button. Same precedence as the assessment
+              banner: don't surface MH surfaces until the user has either
+              taken or explicitly skipped the assessment. */}
+          {me &&
+            !(me.mhStyle === null && me.mhAssessmentSkipCount === 0) && (
+              <button
+                type="button"
+                onClick={() => setHelpModalOpen(true)}
+                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+              >
+                Help me think
+              </button>
+            )}
           <Link
             href="/daily"
             className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
@@ -512,6 +528,10 @@ export function DashboardView() {
           </>
         )}
       </section>
+      <HelpMeThinkModal
+        open={helpModalOpen}
+        onClose={() => setHelpModalOpen(false)}
+      />
     </main>
   );
 }
