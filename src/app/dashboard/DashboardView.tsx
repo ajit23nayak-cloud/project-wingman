@@ -16,6 +16,7 @@ import {
   useTriggerIngest,
   useDraftCount,
   useStreak,
+  useNudges,
   type Counts,
   type FilterValue,
   type EmailRow,
@@ -109,6 +110,7 @@ export function DashboardView() {
   const { data: counts, error: countsError } = useCounts();
   const { data: draftCount } = useDraftCount();
   const { data: streak } = useStreak();
+  const nudges = useNudges();
   const emailsHook = useEmails(filter, PAGE_SIZE);
 
   const triggerIngest = useTriggerIngest();
@@ -335,6 +337,15 @@ export function DashboardView() {
           </div>
         )}
 
+        {nudges.widget && (
+          <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <h3 className="font-semibold text-slate-900">
+              {nudges.widget.title}
+            </h3>
+            <p className="mt-1 text-sm text-slate-700">{nudges.widget.body}</p>
+          </div>
+        )}
+
         {ingestError && (
           <p className="mt-3 text-sm text-red-600">{ingestError}</p>
         )}
@@ -400,6 +411,21 @@ export function DashboardView() {
           <p className="mb-3 text-sm text-gray-600">
             Classifying your inbox… ({counts.pending} remaining)
           </p>
+        )}
+
+        {nudges.observations.length > 0 && (
+          <div className="mb-3 space-y-1">
+            {nudges.observations.map((obs, i) => (
+              <Link
+                key={i}
+                href={obs.href}
+                className="block text-sm italic text-gray-600 hover:text-gray-900 hover:underline"
+              >
+                {obs.text}{" "}
+                <span className="not-italic text-xs text-gray-500">→</span>
+              </Link>
+            ))}
+          </div>
         )}
 
         {emailsHook.error ? (

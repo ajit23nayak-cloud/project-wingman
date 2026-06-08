@@ -363,6 +363,148 @@ export function useStreak() {
   );
 }
 
+// --- recent rituals (for missed-ritual nudge trigger) -----------------------
+
+// Returns the timestamp of the most recent ritual entry for this user, or
+// null if none. Used by useNudges to compute days-since-last-ritual.
+export function useRecentRituals() {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<{ lastRitualAt: string | null }>(
+    me ? ["recent_rituals", me.supabaseUserId] : null,
+    async () => {
+      const { data, error } = await supabase
+        .from("mh_sessions")
+        .select("created_at")
+        .in("type", ["morning_ritual", "evening_ritual"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return { lastRitualAt: data?.created_at ?? null };
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+// --- contextual nudges ------------------------------------------------------
+
+import {
+  computeTriggers,
+  copyFor,
+  patternsFor,
+  MAX_OBSERVATIONS_PER_LOAD,
+  type ActiveTrigger,
+  type WidgetContent,
+  type ObservationContent,
+} from "@/lib/mh/nudges";
+
+export type ResolvedNudges = {
+  widget: WidgetContent | null;
+  observations: ObservationContent[];
+  isLoading: boolean;
+};
+
+function daysSinceFromTimestamp(ts: string | null): number | null {
+  if (!ts) return null;
+  const last = new Date(ts);
+  last.setUTCHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const diffMs = today.getTime() - last.getTime();
+  return Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
+}
+
+// localStorage frequency cap. Namespaced by clerkUserId per Tab 2 22:50 UTC
+// flag C — multi-account browsers don't collide. v0 mechanism; v1 moves
+// to server-side mh_nudges table.
+function widgetSeenToday(clerkUserId: string, triggerId: string): boolean {
+  if (typeof window === "undefined") return false;
+  const key = `wingman:nudges:widgetSeen:${clerkUserId}:${triggerId}`;
+  const stored = window.localStorage.getItem(key);
+  const today = new Date().toISOString().slice(0, 10);
+  return stored === today;
+}
+
+function markWidgetSeen(clerkUserId: string, triggerId: string): void {
+  if (typeof window === "undefined") return;
+  const key = `wingman:nudges:widgetSeen:${clerkUserId}:${triggerId}`;
+  const today = new Date().toISOString().slice(0, 10);
+  window.localStorage.setItem(key, today);
+}
+
+// Composes useMe + useCounts + useRecentRituals → array of active triggers
+// → style-routed nudges → frequency-capped output. Widget shows the
+// highest-priority trigger that hasn't been seen today; observations stack
+// up to MAX_OBSERVATIONS_PER_LOAD.
+//
+// "Highest priority" v0 ordering: missed_ritual > urgent_overflow. Missed
+// ritual is a deeper signal (engagement) than inbox load (operational).
+// When trigger count grows, formalize via a priority field on Trigger.
+const TRIGGER_PRIORITY: Record<string, number> = {
+  missed_ritual: 0,
+  urgent_overflow: 1,
+};
+
+export function useNudges(): ResolvedNudges {
+  const { data: me } = useMe();
+  const { data: counts } = useCounts();
+  const recent = useRecentRituals();
+
+  const isLoading =
+    me === undefined || counts === undefined || recent.data === undefined;
+
+  if (isLoading || !me) {
+    return { widget: null, observations: [], isLoading: true };
+  }
+
+  const daysSince = daysSinceFromTimestamp(recent.data?.lastRitualAt ?? null);
+  const triggers = computeTriggers({
+    urgentCount: counts?.urgent ?? 0,
+    daysSinceLastRitual: daysSince,
+  });
+
+  // Apply priority sort so widget picks the highest-priority trigger and
+  // observations render in a stable order across loads.
+  const sorted = [...triggers].sort((a, b) => {
+    const ap = TRIGGER_PRIORITY[a.id] ?? 99;
+    const bp = TRIGGER_PRIORITY[b.id] ?? 99;
+    return ap - bp;
+  });
+
+  const assessmentSkipped = me.mhAssessmentSkipCount > 0;
+
+  let widget: WidgetContent | null = null;
+  const observations: ObservationContent[] = [];
+
+  for (const trig of sorted) {
+    const patterns = patternsFor(trig.id, me.mhStyle, assessmentSkipped);
+    if (patterns.length === 0) continue;
+    const copy = copyFor(trig as ActiveTrigger, me.mhStyle);
+    if (patterns.includes("widget") && !widget && copy.widget) {
+      // Frequency cap: skip widget if user already saw this trigger's
+      // widget today. Mark-as-seen happens in the dashboard render (the
+      // first time the widget actually renders, not at compute time).
+      if (!widgetSeenToday(me.supabaseUserId, trig.id)) {
+        widget = copy.widget;
+        // We mark-seen here at compute time. The widget might fail to
+        // render (e.g. dashboard is unmounting), but accepting that edge
+        // is simpler than pushing the mark-seen call into the consumer.
+        markWidgetSeen(me.supabaseUserId, trig.id);
+      }
+    }
+    if (
+      patterns.includes("observation") &&
+      copy.observation &&
+      observations.length < MAX_OBSERVATIONS_PER_LOAD
+    ) {
+      observations.push(copy.observation);
+    }
+  }
+
+  return { widget, observations, isLoading: false };
+}
+
 // --- drafts count -----------------------------------------------------------
 
 // Returns the total drafts count for the current user (RLS-scoped). Used by
