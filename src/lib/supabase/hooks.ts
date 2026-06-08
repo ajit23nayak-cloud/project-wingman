@@ -318,6 +318,51 @@ export function useEmailBody(emailId: string) {
   );
 }
 
+// --- daily ritual prefill + streak ------------------------------------------
+
+// Pinned shapes from /api/mh/ritual/today and /api/mh/streak (CONVENTIONS.md
+// rule 2). Session rows are nullable because either morning or evening (or
+// both) may not have been done yet today.
+export type RitualSession = {
+  id: string;
+  type: "morning_ritual" | "evening_ritual";
+  framework_used: "operational" | "state" | "inquiry" | "mixed";
+  numeric_data: Record<string, unknown> | null;
+  text_data: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type TodayRitualResponse = {
+  morning: RitualSession | null;
+  evening: RitualSession | null;
+};
+
+export function useTodayRitual() {
+  const { data: me } = useMe();
+  return useSWR<TodayRitualResponse>(
+    me ? "/api/mh/ritual/today" : null,
+    async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`today_${res.status}`);
+      return res.json();
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+export function useStreak() {
+  const { data: me } = useMe();
+  return useSWR<{ streakDays: number }>(
+    me ? "/api/mh/streak" : null,
+    async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`streak_${res.status}`);
+      return res.json();
+    },
+    { revalidateOnMount: true },
+  );
+}
+
 // --- drafts count -----------------------------------------------------------
 
 // Returns the total drafts count for the current user (RLS-scoped). Used by

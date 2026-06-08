@@ -378,7 +378,6 @@ async function getMessageThreadingHeaders(
 // RFC 2047 encode a header value if it contains non-ASCII chars. Plain ASCII
 // passes through unchanged.
 function encodeHeaderValue(value: string): string {
-  // eslint-disable-next-line no-control-regex
   if (/^[\x00-\x7F]*$/.test(value)) return value;
   const b64 = Buffer.from(value, "utf-8").toString("base64");
   return `=?UTF-8?B?${b64}?=`;

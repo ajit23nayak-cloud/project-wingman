@@ -15,6 +15,7 @@ import {
   useEmails,
   useTriggerIngest,
   useDraftCount,
+  useStreak,
   type Counts,
   type FilterValue,
   type EmailRow,
@@ -107,6 +108,7 @@ export function DashboardView() {
   const { data: me, error: meError } = useMe();
   const { data: counts, error: countsError } = useCounts();
   const { data: draftCount } = useDraftCount();
+  const { data: streak } = useStreak();
   const emailsHook = useEmails(filter, PAGE_SIZE);
 
   const triggerIngest = useTriggerIngest();
@@ -213,6 +215,17 @@ export function DashboardView() {
       <header className="flex justify-between items-center max-w-4xl mx-auto">
         <h1 className="text-xl font-semibold">Project Wingman</h1>
         <div className="flex items-center gap-3">
+          <Link
+            href="/daily"
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+          >
+            Daily ritual
+            {streak && streak.streakDays > 0 && (
+              <span className="ml-1.5 text-xs text-gray-500">
+                · {streak.streakDays}d
+              </span>
+            )}
+          </Link>
           <button
             onClick={() => runIngest(false)}
             disabled={isIngesting}
