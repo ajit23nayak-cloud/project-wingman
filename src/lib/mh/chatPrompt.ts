@@ -1,18 +1,23 @@
 // Chat fallback system prompt for the "Something else" route. Style-injected
-// per the user's mh_style. Includes the INLINE MINIMAL SAFETY BOUNDARY per
-// Tab 2 23:35 UTC Flag E lock — Commit F will replace this with the full
-// detection + admin logging + escalation pipeline.
+// per the user's mh_style.
 //
-// Why inline minimal safety in v0: blocking the chat route until Commit F
-// ships removes the most flexible MH surface for the trial. Inline minimal
-// is acceptable risk: the LLM does best-effort refusal + escalation script
-// output. Not Commit-F-quality (no detection, no logging) but better than
-// nothing or a blocked route.
+// Commit F version (replaces inline minimal safety from Commit D). The
+// safety boundary is now defense-in-depth:
+//   Layer 1: src/lib/mh/safety/screen.ts regex pre-LLM screen. Routes that
+//            trigger never reach the LLM — escalation script returned
+//            immediately + logged via safety/log.ts.
+//   Layer 2: this prompt's SAFETY BOUNDARY section. LLM honors the same
+//            rules for phrases that evade the regex (e.g. metaphorical
+//            language, non-English, novel framings).
 //
-// Regional resources from MH_UI_SPEC.md L307-311.
+// The escalation text in this prompt is templated with region-specific
+// resources at build time per Tab 2 01:05 UTC lock — chat route looks up
+// region from Clerk timezone via regionDetect.ts and passes through here.
 
 import type { MhStyle } from "@/lib/supabase/hooks";
 import type { RitualVariant } from "@/lib/mh/ritual";
+import type { Region } from "./safety/resources";
+import { escalationScript } from "./safety/resources";
 
 const STYLE_NUDGE: Record<RitualVariant, string> = {
   operational:
@@ -25,9 +30,13 @@ const STYLE_NUDGE: Record<RitualVariant, string> = {
     "The user hasn't picked a framework yet. Stay balanced — light reflection, no heavy framework moves. Match their lead.",
 };
 
-export function buildChatSystemPrompt(mhStyle: MhStyle | null): string {
+export function buildChatSystemPrompt(
+  mhStyle: MhStyle | null,
+  region: Region,
+): string {
   const variant: RitualVariant = mhStyle ?? "mixed";
   const styleNudge = STYLE_NUDGE[variant];
+  const script = escalationScript(region);
 
   return `You are Wingman's reflection coach. The user opened "Help me think" because something is on their mind that doesn't fit the structured routes (decision / stressful thought / drained). Help them think it through.
 
@@ -43,22 +52,15 @@ Tone and shape:
 SAFETY BOUNDARY (non-negotiable):
 
 If the user mentions ANY of:
-- self-harm or suicidal thoughts ("end it", "not be here", "kill myself", etc.)
-- severe symptoms (panic attacks, dissociation, intrusive thoughts of harming others)
-- abuse situations (being harmed by someone)
+- self-harm or suicidal thoughts ("end it", "not be here", "kill myself", "want to die", etc.)
+- severe symptoms (panic attacks, dissociation, intrusive thoughts of harming others, hallucinations)
+- abuse situations (being harmed by someone, fear for their safety)
 - requests for clinical diagnosis ("am I depressed?", "do I have ADHD?")
 - requests for medication or dosage advice
 
 STOP coaching. Output EXACTLY this and nothing else:
 
-This is bigger than what I'm built for. Please reach out to a professional right now:
-
-- India: iCall (9152987821, Mon-Sat 8am-10pm) or Vandrevala Foundation (1860-2662-345, 24/7)
-- US: 988 Suicide & Crisis Lifeline
-- UK: Samaritans (116 123)
-- Elsewhere: https://www.iasp.info/resources/Crisis_Centres
-
-I'll be here when you're ready.
+${script}
 
 After outputting that, do not continue. Do not coach. Wait for the user to redirect.`;
 }

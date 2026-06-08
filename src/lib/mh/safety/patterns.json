@@ -1,0 +1,53 @@
+{
+  "comment": "Defense-in-depth pre-LLM regex screen for safety boundary triggers. Replaces the inline minimal safety from Commit D's chatPrompt.ts with explicit detection that runs BEFORE the LLM call so we can log + short-circuit. Patterns are case-insensitive substrings (compiled to /pattern/i in screen.ts). When in doubt, prefer false positives (escalation script vs missed signal). Tab 2 01:05 UTC + Ajit all-8 lock.",
+  "ideation": [
+    "kill myself",
+    "want to die",
+    "end it all",
+    "end my life",
+    "not be here anymore",
+    "don't want to be here",
+    "no reason to live",
+    "better off dead",
+    "suicidal",
+    "thinking of suicide",
+    "hurt myself",
+    "self-harm",
+    "cutting myself"
+  ],
+  "abuse": [
+    "being abused",
+    "he hits me",
+    "she hits me",
+    "they hit me",
+    "afraid for my safety",
+    "afraid of him",
+    "afraid of her",
+    "afraid of them",
+    "domestic violence"
+  ],
+  "severe_symptoms": [
+    "panic attacks",
+    "dissociating",
+    "dissociation",
+    "intrusive thoughts of harm",
+    "thoughts of harming",
+    "psychotic",
+    "hallucinating"
+  ],
+  "clinical_diagnosis": [
+    "am i depressed",
+    "do i have depression",
+    "am i bipolar",
+    "do i have bipolar",
+    "do i have adhd",
+    "am i autistic",
+    "am i ocd",
+    "have i got",
+    "diagnose me",
+    "do i need medication",
+    "should i be on medication",
+    "what dosage",
+    "prescription for"
+  ]
+}

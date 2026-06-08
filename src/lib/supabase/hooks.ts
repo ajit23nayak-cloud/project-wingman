@@ -527,6 +527,31 @@ export function useRecentRituals() {
   );
 }
 
+// --- safety escalation count (Commit F proactive nudge) --------------------
+
+// Count of safety escalations for the current user in the last 7 days.
+// Drives the dashboard proactive nudge banner when count >= 3 — per Tab 2
+// 01:05 UTC + Ajit all-8 lock. RLS-scoped browser-direct query.
+export function useEscalationCount7d() {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<number>(
+    me ? ["escalation_count_7d", me.supabaseUserId] : null,
+    async () => {
+      const sevenDaysAgo = new Date(
+        Date.now() - 7 * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      const { count, error } = await supabase
+        .from("mh_escalations")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", sevenDaysAgo);
+      if (error) throw new Error(error.message);
+      return count ?? 0;
+    },
+    { revalidateOnMount: true },
+  );
+}
+
 // --- contextual nudges ------------------------------------------------------
 
 import {

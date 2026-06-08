@@ -18,6 +18,7 @@ import {
   useDraftCount,
   useStreak,
   useNudges,
+  useEscalationCount7d,
   markNudgeWidgetSeen,
   type Counts,
   type FilterValue,
@@ -135,6 +136,7 @@ export function DashboardView() {
   const { data: counts, error: countsError } = useCounts();
   const { data: draftCount } = useDraftCount();
   const { data: streak } = useStreak();
+  const { data: escalationCount7d } = useEscalationCount7d();
   const nudges = useNudges();
   const emailsHook = useEmails(filter, PAGE_SIZE);
 
@@ -401,6 +403,39 @@ export function DashboardView() {
               {nudges.widget.title}
             </h3>
             <p className="mt-1 text-sm text-slate-700">{nudges.widget.body}</p>
+          </div>
+        )}
+
+        {/* Proactive safety nudge — fires when user has hit the safety
+            boundary 3+ times in the last 7 days. Per Tab 2 01:05 UTC lock,
+            this is a gentle reminder that Wingman isn't built for the
+            weight they're carrying. No content shared, just the count
+            signal. */}
+        {escalationCount7d !== undefined && escalationCount7d >= 3 && (
+          <div className="mt-6 rounded-lg border border-rose-200 bg-rose-50 p-4">
+            <h3 className="font-semibold text-rose-900">
+              Wingman noticed you&apos;ve been carrying heavy weeks
+            </h3>
+            <p className="mt-1 text-sm text-rose-800">
+              We&apos;re not built for this kind of support — please consider
+              talking to a professional. Crisis resources:
+            </p>
+            <ul className="mt-2 text-sm text-rose-800 list-disc pl-5 space-y-0.5">
+              <li>India: iCall 9152987821, Vandrevala 1860-2662-345</li>
+              <li>US: 988 Suicide &amp; Crisis Lifeline</li>
+              <li>UK: Samaritans 116 123</li>
+              <li>
+                Elsewhere:{" "}
+                <a
+                  href="https://www.iasp.info/resources/Crisis_Centres"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  IASP directory
+                </a>
+              </li>
+            </ul>
           </div>
         )}
 
