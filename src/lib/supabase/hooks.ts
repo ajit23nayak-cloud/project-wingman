@@ -541,6 +541,10 @@ import {
 
 export type ResolvedNudges = {
   widget: WidgetContent | null;
+  // Trigger id whose widget is currently rendered. Returned alongside so the
+  // dashboard can mark-seen via markNudgeWidgetSeen() in a useEffect AFTER
+  // render — never at compute time inside this hook.
+  widgetTrigger: string | null;
   observations: ObservationContent[];
   isLoading: boolean;
 };
@@ -573,6 +577,19 @@ function markWidgetSeen(clerkUserId: string, triggerId: string): void {
   window.localStorage.setItem(key, today);
 }
 
+// Exposed so DashboardView can mark-seen AFTER the widget actually renders
+// in DOM. Per Tab 2 01:35 batch instruction: don't write the seen flag from
+// inside useNudges (compute time) because there's no guarantee the consumer
+// will render the widget. Marking at render-time eliminates the speculative-
+// seen-write bug class — if widget never reaches DOM, flag stays unset, next
+// visit retries.
+export function markNudgeWidgetSeen(
+  supabaseUserId: string,
+  triggerId: string,
+): void {
+  markWidgetSeen(supabaseUserId, triggerId);
+}
+
 // Composes useMe + useCounts + useRecentRituals → array of active triggers
 // → style-routed nudges → frequency-capped output. Widget shows the
 // highest-priority trigger that hasn't been seen today; observations stack
@@ -595,7 +612,7 @@ export function useNudges(): ResolvedNudges {
     me === undefined || counts === undefined || recent.data === undefined;
 
   if (isLoading || !me) {
-    return { widget: null, observations: [], isLoading: true };
+    return { widget: null, widgetTrigger: null, observations: [], isLoading: true };
   }
 
   const daysSince = daysSinceFromTimestamp(recent.data?.lastRitualAt ?? null);
@@ -615,6 +632,7 @@ export function useNudges(): ResolvedNudges {
   const assessmentSkipped = me.mhAssessmentSkipCount > 0;
 
   let widget: WidgetContent | null = null;
+  let widgetTrigger: string | null = null;
   const observations: ObservationContent[] = [];
 
   for (const trig of sorted) {
@@ -622,15 +640,13 @@ export function useNudges(): ResolvedNudges {
     if (patterns.length === 0) continue;
     const copy = copyFor(trig as ActiveTrigger, me.mhStyle);
     if (patterns.includes("widget") && !widget && copy.widget) {
-      // Frequency cap: skip widget if user already saw this trigger's
-      // widget today. Mark-as-seen happens in the dashboard render (the
-      // first time the widget actually renders, not at compute time).
+      // Frequency cap: skip widget if user already saw this trigger's widget
+      // today. Read here at compute time so we don't show a widget the user
+      // has dismissed; the WRITE side of the seen flag has moved to
+      // DashboardView's render-time useEffect (markNudgeWidgetSeen).
       if (!widgetSeenToday(me.supabaseUserId, trig.id)) {
         widget = copy.widget;
-        // We mark-seen here at compute time. The widget might fail to
-        // render (e.g. dashboard is unmounting), but accepting that edge
-        // is simpler than pushing the mark-seen call into the consumer.
-        markWidgetSeen(me.supabaseUserId, trig.id);
+        widgetTrigger = trig.id;
       }
     }
     if (
@@ -642,7 +658,7 @@ export function useNudges(): ResolvedNudges {
     }
   }
 
-  return { widget, observations, isLoading: false };
+  return { widget, widgetTrigger, observations, isLoading: false };
 }
 
 // --- drafts count -----------------------------------------------------------

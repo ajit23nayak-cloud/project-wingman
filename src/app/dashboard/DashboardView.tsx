@@ -18,6 +18,7 @@ import {
   useDraftCount,
   useStreak,
   useNudges,
+  markNudgeWidgetSeen,
   type Counts,
   type FilterValue,
   type EmailRow,
@@ -181,6 +182,17 @@ export function DashboardView() {
     (me.mhAssessmentSkippedAt === null ||
       Date.now() - new Date(me.mhAssessmentSkippedAt).getTime() >
         SKIP_COOLDOWN_MS);
+
+  // Render-time mark-seen for the contextual nudge widget. Lifted out of
+  // useNudges per Tab 2's 01:35 batch instruction — only flag the trigger as
+  // "seen today" when the widget actually reaches DOM. Prevents the
+  // speculative-seen-write bug class where useNudges returns a widget that
+  // never renders (rare but possible during route transitions).
+  useEffect(() => {
+    if (nudges.widget && nudges.widgetTrigger && me) {
+      markNudgeWidgetSeen(me.supabaseUserId, nudges.widgetTrigger);
+    }
+  }, [nudges.widget, nudges.widgetTrigger, me]);
 
   const runIngest = async (isAuto: boolean) => {
     setIsIngesting(true);
