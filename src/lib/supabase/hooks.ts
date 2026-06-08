@@ -59,6 +59,126 @@ export function useMe() {
   );
 }
 
+// --- drafts: generate / patch / delete / send -------------------------------
+
+// Each hook invalidates the matching useEmail(emailId) key so the detail
+// page re-renders with the updated draft state. We don't return SWR shape
+// here because these are imperative actions, not subscriptions.
+
+export function useGenerateDraft() {
+  const { mutate } = useSWRConfig();
+  const { data: me } = useMe();
+  return async (
+    emailId: string,
+  ): Promise<{ ok: boolean; body?: string; error?: string }> => {
+    try {
+      const res = await fetch("/api/drafts/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email_id: emailId }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        if (me) {
+          await mutate(["email", emailId, me.supabaseUserId]);
+        }
+        return { ok: true, body: data.body };
+      }
+      return { ok: false, error: data.error ?? `generate_${res.status}` };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+export function useUpdateDraft() {
+  const { mutate } = useSWRConfig();
+  const { data: me } = useMe();
+  return async (
+    draftId: string,
+    body: string,
+    emailId: string,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`/api/drafts/${draftId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        if (me) await mutate(["email", emailId, me.supabaseUserId]);
+        return { ok: true };
+      }
+      return { ok: false, error: data.error ?? `patch_${res.status}` };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+export function useDeleteDraft() {
+  const { mutate } = useSWRConfig();
+  const { data: me } = useMe();
+  return async (
+    draftId: string,
+    emailId: string,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`/api/drafts/${draftId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        if (me) await mutate(["email", emailId, me.supabaseUserId]);
+        return { ok: true };
+      }
+      return { ok: false, error: data.error ?? `delete_${res.status}` };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+export function useSendDraft() {
+  const { mutate } = useSWRConfig();
+  const { data: me } = useMe();
+  return async (
+    draftId: string,
+    emailId: string,
+  ): Promise<{ ok: boolean; error?: string; messageId?: string }> => {
+    try {
+      const res = await fetch(`/api/drafts/${draftId}/send`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        if (me) {
+          await mutate(["email", emailId, me.supabaseUserId]);
+          // Also nudge the dashboard email list so the ✓ chip updates.
+          await mutate(
+            (key) => Array.isArray(key) && key[0] === "emails",
+          );
+        }
+        return { ok: true, messageId: data.messageId };
+      }
+      return { ok: false, error: data.error ?? `send_${res.status}` };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
 // --- clear-reauth-flag ------------------------------------------------------
 
 // POSTs /api/dashboard/clear-reauth-flag, then revalidates useMe so the

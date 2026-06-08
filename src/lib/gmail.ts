@@ -354,6 +354,123 @@ export async function listSentMessagesLastNDays(
   return out;
 }
 
+// Fetch just the threading-related headers (Message-ID, References) of an
+// existing message — needed to compose RFC 2822 In-Reply-To / References on
+// a reply we are about to send. Internal helper for sendReply.
+async function getMessageThreadingHeaders(
+  accessToken: string,
+  gmailMessageId: string,
+): Promise<{ messageIdHeader: string; referencesHeader: string }> {
+  const gmail = getGmailClient(accessToken);
+  const res = await gmail.users.messages.get({
+    userId: "me",
+    id: gmailMessageId,
+    format: "metadata",
+    metadataHeaders: ["Message-ID", "References"],
+  });
+  const headers = res.data.payload?.headers;
+  return {
+    messageIdHeader: getHeader(headers, "Message-ID"),
+    referencesHeader: getHeader(headers, "References"),
+  };
+}
+
+// RFC 2047 encode a header value if it contains non-ASCII chars. Plain ASCII
+// passes through unchanged.
+function encodeHeaderValue(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x00-\x7F]*$/.test(value)) return value;
+  const b64 = Buffer.from(value, "utf-8").toString("base64");
+  return `=?UTF-8?B?${b64}?=`;
+}
+
+// Assemble the RFC 2822 MIME for a reply without sending. Extracted so the
+// dry_run path in /api/drafts/[id]/send can validate end-to-end without
+// firing gmail.users.messages.send.
+export async function assembleReplyMime(
+  accessToken: string,
+  params: {
+    toAddress: string;
+    fromAddress: string;
+    subject: string;
+    replyBody: string;
+    inReplyToMessageId: string;
+  },
+): Promise<{ raw: string; haveMessageId: boolean }> {
+  const { messageIdHeader, referencesHeader } = await getMessageThreadingHeaders(
+    accessToken,
+    params.inReplyToMessageId,
+  );
+  const haveMessageId =
+    typeof messageIdHeader === "string" && messageIdHeader.length > 0;
+
+  const replySubject = params.subject.toLowerCase().startsWith("re:")
+    ? params.subject
+    : `Re: ${params.subject}`;
+
+  const headers: string[] = [`To: ${params.toAddress}`];
+  if (params.fromAddress && params.fromAddress !== "me") {
+    headers.push(`From: ${params.fromAddress}`);
+  }
+  headers.push(`Subject: ${encodeHeaderValue(replySubject)}`);
+  if (haveMessageId) {
+    const inReplyTo = messageIdHeader;
+    const references =
+      referencesHeader && referencesHeader.length > 0
+        ? `${referencesHeader} ${inReplyTo}`
+        : inReplyTo;
+    headers.push(`In-Reply-To: ${inReplyTo}`);
+    headers.push(`References: ${references}`);
+  }
+  headers.push(`Content-Type: text/plain; charset="UTF-8"`);
+  headers.push(`Content-Transfer-Encoding: 8bit`);
+  headers.push(`MIME-Version: 1.0`);
+
+  const raw = headers.join("\r\n") + "\r\n\r\n" + params.replyBody;
+  return { raw, haveMessageId };
+}
+
+// Send a reply on an existing Gmail thread. Looks up the original message's
+// Message-ID / References headers internally so threading works end-to-end:
+// threadId on the send body keeps Gmail's grouping, In-Reply-To + References
+// keep RFC 2822 threading semantics for non-Gmail recipients.
+//
+// `inReplyToMessageId` is Gmail's internal id (the "id" field stored on the
+// emails table), NOT the Message-ID header. The header is fetched here.
+export async function sendReply(
+  accessToken: string,
+  params: {
+    threadId: string;
+    toAddress: string;
+    fromAddress: string;
+    subject: string;
+    replyBody: string;
+    inReplyToMessageId: string;
+  },
+): Promise<{ messageId: string; threadId: string }> {
+  const gmail = getGmailClient(accessToken);
+  try {
+    const { raw, haveMessageId } = await assembleReplyMime(accessToken, params);
+    if (!haveMessageId) {
+      console.warn("[sendReply] original Message-ID header missing", {
+        gmailMessageId: params.inReplyToMessageId,
+      });
+    }
+    const encoded = Buffer.from(raw, "utf-8").toString("base64url");
+    const res = await gmail.users.messages.send({
+      userId: "me",
+      requestBody: { raw: encoded, threadId: params.threadId },
+    });
+    return {
+      messageId: res.data.id ?? "",
+      threadId: res.data.threadId ?? params.threadId,
+    };
+  } catch (err) {
+    if (isGmailAuthError(err)) throw new GmailAuthError();
+    throw err;
+  }
+}
+
 export async function getMessageBody(
   accessToken: string,
   gmailMessageId: string,
