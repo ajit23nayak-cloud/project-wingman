@@ -114,12 +114,32 @@ FEW-SHOT EXAMPLES
 // `usage` from generateObject is observed to come back as
 // `{ inputTokens?: number, outputTokens?: number, totalTokens?: number }`
 // with all fields optional. We propagate the optionality up to callers.
-export async function classifyEmailContent(email: {
-  fromAddress: string;
-  subject: string;
-  snippet: string;
-  userEmail: string;
-}): Promise<{
+//
+// Multi-source classification: same SYSTEM_PROMPT for both Gmail emails and
+// Slack DMs, but the USER prompt is source-shaped. Slack DMs get a brief
+// source-context preface telling the model that most email-specific decision
+// rules don't apply (no mailer-daemon bounces, no LinkedIn job alerts, no
+// marketing blasts in 1:1 DMs) and to fall through to first-principles. Per
+// Tab 2's Commit 4 lock: "single classifier with source-aware prompt addendum"
+// — don't fork the system prompt.
+export type ClassifyInput =
+  | {
+      source: "gmail";
+      fromAddress: string;
+      subject: string;
+      snippet: string;
+      userEmail: string;
+    }
+  | {
+      source: "slack";
+      senderName: string | null;
+      senderId: string;
+      channelId: string;
+      text: string;
+      userEmail: string;
+    };
+
+export async function classifyContent(input: ClassifyInput): Promise<{
   result: ClassificationResult;
   usage: {
     inputTokens: number | undefined;
@@ -127,11 +147,30 @@ export async function classifyEmailContent(email: {
     totalTokens: number | undefined;
   };
 }> {
-  const userPrompt = `Classify this email:
-From: ${email.fromAddress}
-Subject: ${email.subject}
-Snippet: ${(email.snippet ?? "").slice(0, 500)}
-Founder's email: ${email.userEmail}`;
+  let userPrompt: string;
+  if (input.source === "gmail") {
+    userPrompt = `Classify this email:
+From: ${input.fromAddress}
+Subject: ${input.subject}
+Snippet: ${(input.snippet ?? "").slice(0, 500)}
+Founder's email: ${input.userEmail}`;
+  } else {
+    const sender = input.senderName ?? input.senderId;
+    userPrompt = `Classify this Slack DM.
+
+SOURCE CONTEXT: This is a 1:1 Slack direct message, not an email. The decision rules above are email-centric — most won't apply to DMs (no mailer-daemon bounces, no infra billing emails, no OTPs, no marketing blasts, no LinkedIn job alerts in 1:1 DMs). Fall through to first-principles framing:
+
+- URGENT: explicit ask with a same-day or next-24h deadline; an active thread waiting on the founder's reply to unblock someone; a 1:1 ping from a co-founder / investor / customer about a live issue.
+- IMPORTANT: a real conversation requiring a thoughtful reply, but not 24h-urgent; pipeline / hiring / customer threads the founder is in.
+- FYI: status updates, FYI-style pings, links shared with no ask.
+- ARCHIVE: bot messages, automated notifications routed to DMs, casual one-liners with no follow-up needed.
+
+DM:
+From: ${sender}
+Channel: ${input.channelId}
+Message: ${input.text.slice(0, 500)}
+Founder's email: ${input.userEmail}`;
+  }
 
   const { object, usage } = await generateObject({
     model: getGeminiModel(),

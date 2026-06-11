@@ -19,10 +19,13 @@ import {
   useStreak,
   useNudges,
   useEscalationCount7d,
+  useSlackWorkspace,
+  useSlackMessages,
   markNudgeWidgetSeen,
   type Counts,
   type FilterValue,
   type EmailRow,
+  type SlackMessageRow,
 } from "@/lib/supabase/hooks";
 
 const ONBOARDING_DISMISS_KEY = "wingman_onboarding_dismissed";
@@ -112,6 +115,69 @@ function formatEmailTime(ms: number): string {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+// Inline Slack mark — official colorway. Copied from SettingsView's SlackIcon
+// so we don't take a cross-component import dependency for one SVG.
+function SlackIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M5 14.5a2.5 2.5 0 1 1 2.5-2.5v2.5H5z" fill="#36C5F0" />
+      <path
+        d="M6.25 14.5a2.5 2.5 0 0 1 5 0v6.25a2.5 2.5 0 0 1-5 0V14.5z"
+        fill="#2EB67D"
+      />
+      <path d="M9.5 5a2.5 2.5 0 1 1 2.5 2.5H9.5V5z" fill="#ECB22E" />
+      <path
+        d="M9.5 6.25a2.5 2.5 0 0 1 0 5H3.25a2.5 2.5 0 0 1 0-5H9.5z"
+        fill="#E01E5A"
+      />
+      <path d="M19 9.5a2.5 2.5 0 1 1-2.5 2.5V9.5H19z" fill="#36C5F0" />
+      <path
+        d="M17.75 9.5a2.5 2.5 0 0 1-5 0V3.25a2.5 2.5 0 0 1 5 0V9.5z"
+        fill="#2EB67D"
+      />
+      <path d="M14.5 19a2.5 2.5 0 1 1-2.5-2.5h2.5V19z" fill="#ECB22E" />
+      <path
+        d="M14.5 17.75a2.5 2.5 0 0 1 0-5h6.25a2.5 2.5 0 0 1 0 5H14.5z"
+        fill="#E01E5A"
+      />
+    </svg>
+  );
+}
+
+// Slack message row. Matches the email row's visual rhythm — same border,
+// same padding, same classification badge color scheme. Prefixed with the
+// Slack icon instead of the (implicit) email source.
+function SlackMessageRowView({ message }: { message: SlackMessageRow }) {
+  const sender = message.sender_name ?? message.sender_id;
+  const badgeClass = BADGE_STYLES[message.classification];
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-gray-100 bg-white px-3 py-2 hover:border-gray-300">
+      <SlackIcon className="h-4 w-4 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium text-gray-900">
+            {sender}
+          </span>
+          <span
+            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase ${badgeClass}`}
+          >
+            {message.classification}
+          </span>
+        </div>
+        <p className="mt-0.5 truncate text-xs text-gray-600">{message.text}</p>
+      </div>
+      <span className="shrink-0 text-xs text-gray-500">
+        {formatEmailTime(message.received_at)}
+      </span>
+    </div>
+  );
+}
+
 const ERROR_MESSAGES: Record<string, string> = {
   not_authenticated: "You need to sign in.",
   no_google_token:
@@ -137,6 +203,9 @@ export function DashboardView() {
   const { data: draftCount } = useDraftCount();
   const { data: streak } = useStreak();
   const { data: escalationCount7d } = useEscalationCount7d();
+  const { data: slackWorkspace, isLoading: slackWorkspaceLoading } =
+    useSlackWorkspace();
+  const { data: slackMessages } = useSlackMessages(filter);
   const nudges = useNudges();
   const emailsHook = useEmails(filter, PAGE_SIZE);
 
@@ -326,6 +395,31 @@ export function DashboardView() {
           >
             Reconnect Gmail
           </Link>
+        </div>
+      )}
+
+      {/* Connect Slack banner — renders only when workspace data has loaded
+          AND no workspace exists. When workspace is present, the Slack DM
+          section below takes over. */}
+      {!slackWorkspaceLoading && !slackWorkspace && (
+        <div className="max-w-4xl mx-auto mt-6 rounded-lg border border-purple-200 bg-purple-50 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-purple-900">
+                Connect Slack
+              </p>
+              <p className="mt-1 text-xs text-purple-800">
+                Pull your 1:1 DMs into Wingman&apos;s classifier alongside your
+                inbox.
+              </p>
+            </div>
+            <Link
+              href="/settings"
+              className="rounded-md bg-purple-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-800 shrink-0"
+            >
+              Open Settings
+            </Link>
+          </div>
         </div>
       )}
 
@@ -603,6 +697,23 @@ export function DashboardView() {
               </p>
             )}
           </>
+        )}
+
+        {/* Slack DM section — separate from the email list, filtered by the
+            same activeFilter. v0 limit: 20 most-recent classified messages,
+            no pagination. Hidden when no workspace is connected (banner up
+            top covers that CTA). */}
+        {slackWorkspace && slackMessages && slackMessages.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-sm font-semibold text-gray-700 mb-2">
+              Slack DMs
+            </h2>
+            <div className="space-y-1">
+              {slackMessages.map((m) => (
+                <SlackMessageRowView key={m.id} message={m} />
+              ))}
+            </div>
+          </section>
         )}
       </section>
       <HelpMeThinkModal

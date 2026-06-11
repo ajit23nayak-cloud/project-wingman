@@ -273,6 +273,51 @@ export function useSlackWorkspace() {
   );
 }
 
+// --- Slack messages (classifier list) ---------------------------------------
+
+// Pinned shape from supabase.from('slack_messages').select(...) — RLS-scoped
+// by the existing slack_messages_select_own policy (migration 0014 line ~199).
+// classification is non-null in the result set because we filter
+// status='processed' AND classification IS NOT NULL.
+export type SlackMessageRow = {
+  id: string;
+  workspace_id: string;
+  channel_id: string;
+  sender_name: string | null;
+  sender_id: string;
+  text: string;
+  // Reuses the EmailRow classification union; defined further down in this
+  // file but TS hoists types so the forward reference is safe.
+  classification: NonNullable<EmailRow["classification"]>;
+  classification_reason: string | null;
+  received_at: number; // epoch ms
+};
+
+export function useSlackMessages(filter: FilterValue) {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<SlackMessageRow[]>(
+    me ? ["slack_messages", filter, me.supabaseUserId] : null,
+    async () => {
+      let query = supabase
+        .from("slack_messages")
+        .select(
+          "id, workspace_id, channel_id, sender_name, sender_id, text, classification, classification_reason, received_at",
+        )
+        .eq("status", "processed")
+        .not("classification", "is", null)
+        .order("received_at", { ascending: false })
+        .limit(20);
+      if (filter !== "all") {
+        query = query.eq("classification", filter);
+      }
+      const { data, error } = await query;
+      if (error) throw new Error(error.message);
+      return (data ?? []) as SlackMessageRow[];
+    },
+  );
+}
+
 // --- single email + draft ---------------------------------------------------
 
 // Pinned response shape from `supabase.from('emails').select('*, drafts(*)')
