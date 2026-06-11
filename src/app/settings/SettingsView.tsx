@@ -15,10 +15,13 @@
 //   Flag D: cache invalidation post-change (handled in useUpdateStorageTier)
 //   Flag E: race acceptance (no tier-stamped writes for v0)
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useSWRConfig } from "swr";
 import {
   useMe,
+  useSlackWorkspace,
   useStorageTierPreview,
   useUpdateStorageTier,
   type StorageTierPreview,
@@ -95,6 +98,35 @@ export function SettingsView() {
   const [preview, setPreview] = useState<StorageTierPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [typeConfirm, setTypeConfirm] = useState("");
+
+  // Slack OAuth callback toast — landing back on /settings?slack_connected=1
+  // (success) or /settings?slack_error=<code> (failure). Surfaces a toast
+  // via the same successMessage / error slots used by tier-change, then
+  // clears the query string so a refresh doesn't re-trigger the toast.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const { mutate: swrMutate } = useSWRConfig();
+  useEffect(() => {
+    const ok = searchParams.get("slack_connected");
+    const err = searchParams.get("slack_error");
+    if (ok) {
+      setSuccessMessage("Slack workspace connected.");
+      // Invalidate the slack_workspace SWR key so the card flips to
+      // "Connected" without a manual refresh. Match-by-prefix so we hit
+      // the key regardless of which supabaseUserId is appended. Explicit
+      // { revalidate: true } makes the refetch behavior unambiguous.
+      swrMutate(
+        (key) => Array.isArray(key) && key[0] === "slack_workspace",
+        undefined,
+        { revalidate: true },
+      );
+      router.replace("/settings");
+    } else if (err) {
+      setError(`Slack connection failed: ${err}`);
+      router.replace("/settings");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, router]);
 
   // Sync local state when me data arrives.
   if (me && selectedTier !== currentTier && submitting === false && !confirmOpen) {
@@ -287,6 +319,18 @@ export function SettingsView() {
             </button>
           </div>
         </section>
+
+        <section className="mt-8 rounded-lg border border-gray-200 bg-white p-6">
+          <h2 className="text-lg font-semibold">Integrations</h2>
+          <p className="mt-2 text-sm text-gray-600">
+            Connect external sources so Wingman can ingest and classify content
+            alongside your email.
+          </p>
+
+          <div className="mt-6">
+            <SlackIntegrationCard />
+          </div>
+        </section>
       </div>
 
       {confirmOpen && (
@@ -448,6 +492,141 @@ function DowngradeConfirmModal({
           >
             {submitting ? "Deleting…" : "Permanently delete and downgrade"}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Tiny "Xs ago / Xm ago / Xh ago / Xd ago" formatter for connected_at /
+// last_polled_at. v0: deliberately not pulling date-fns just for this.
+function formatRelative(iso: string): string {
+  // Guard clock skew (server clock ahead of client) — clamp negatives to 0
+  // so we don't render "-3s ago".
+  const ms = Date.now() - new Date(iso).getTime();
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function SlackIcon({ className = "h-5 w-5" }: { className?: string }) {
+  // Slack mark — official colorway. Inline SVG keeps the build dep-free.
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path
+        fill="#E01E5A"
+        d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313z"
+      />
+      <path
+        fill="#36C5F0"
+        d="M8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312z"
+      />
+      <path
+        fill="#2EB67D"
+        d="M18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312z"
+      />
+      <path
+        fill="#ECB22E"
+        d="M15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"
+      />
+    </svg>
+  );
+}
+
+function SlackIntegrationCard() {
+  const { data: workspace, isLoading } = useSlackWorkspace();
+
+  if (isLoading) {
+    return <p className="text-sm text-gray-500">Loading…</p>;
+  }
+
+  // Not connected.
+  if (!workspace) {
+    return (
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+        <div className="flex items-start gap-3">
+          <SlackIcon className="mt-0.5 h-6 w-6" />
+          <div>
+            <div className="text-sm font-semibold text-gray-900">Slack</div>
+            <p className="mt-1 text-sm text-gray-600">
+              Connect a Slack workspace to ingest DMs alongside email.
+            </p>
+          </div>
+        </div>
+        <a
+          href="/api/slack/oauth/start"
+          className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+        >
+          Connect Slack
+        </a>
+      </div>
+    );
+  }
+
+  // Connected — disconnected token (revoked / expired).
+  if (workspace.status === "disconnected") {
+    return (
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+        <div className="flex items-start gap-3">
+          <SlackIcon className="mt-0.5 h-6 w-6" />
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-900">
+                Slack — {workspace.team_name ?? workspace.team_id}
+              </span>
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">
+                Disconnected
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-gray-600">
+              Slack token expired or revoked.
+            </p>
+            {workspace.disconnected_at && (
+              <p className="mt-1 text-xs text-gray-500">
+                Disconnected {formatRelative(workspace.disconnected_at)}
+              </p>
+            )}
+          </div>
+        </div>
+        <a
+          href="/api/slack/oauth/start"
+          className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+        >
+          Reconnect Slack
+        </a>
+      </div>
+    );
+  }
+
+  // Connected + active.
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+      <div className="flex items-start gap-3">
+        <SlackIcon className="mt-0.5 h-6 w-6" />
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-gray-900">
+              Slack — {workspace.team_name ?? workspace.team_id}
+            </span>
+            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800">
+              Connected
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-gray-600">
+            Connected {formatRelative(workspace.connected_at)}
+          </p>
+          {workspace.last_polled_at && (
+            <p className="mt-0.5 text-xs text-gray-500">
+              Last sync: {formatRelative(workspace.last_polled_at)}
+            </p>
+          )}
         </div>
       </div>
     </div>

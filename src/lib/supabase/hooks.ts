@@ -236,6 +236,43 @@ export function useCounts() {
   );
 }
 
+// --- Slack workspace --------------------------------------------------------
+
+// Pinned shape from supabase.from('slack_workspaces').select(...) — RLS-scoped to the
+// current user. Returns an array; v0 supports one workspace per user, so we read row[0]
+// or null. Future v1 multi-workspace returns the full array.
+export type SlackWorkspaceRow = {
+  id: string;
+  team_id: string;
+  team_name: string | null;
+  bot_user_id: string | null;
+  status: "active" | "disconnected";
+  connected_at: string;
+  disconnected_at: string | null;
+  last_polled_at: string | null;
+};
+
+export function useSlackWorkspace() {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<SlackWorkspaceRow | null>(
+    me ? ["slack_workspace", me.supabaseUserId] : null,
+    async () => {
+      const { data, error } = await supabase
+        .from("slack_workspaces")
+        .select(
+          "id, team_id, team_name, bot_user_id, status, connected_at, disconnected_at, last_polled_at",
+        )
+        .order("connected_at", { ascending: false })
+        .limit(1);
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as SlackWorkspaceRow[];
+      return rows[0] ?? null;
+    },
+    { revalidateOnMount: true },
+  );
+}
+
 // --- single email + draft ---------------------------------------------------
 
 // Pinned response shape from `supabase.from('emails').select('*, drafts(*)')

@@ -218,3 +218,57 @@ into crisis-shaped concerns, we hand off to professionals. Any free-text
 LLM surface that bypasses the safety boundary breaks that contract.
 
 Established 2026-06-09 (MH Commit F).
+
+## Third-party OAuth: token at rest (Slack deviation)
+
+The general rule for third-party OAuth tokens in Wingman is "follow the Clerk
+pattern — never store, fetch fresh per request" (see Gmail integration in
+`src/lib/clerk.ts` → `getGoogleAccessToken`). This rule was codified after
+migration 0003 dropped unused token columns from Phase 1.
+
+**Slack is the exception.** Slack OAuth is not a Clerk-managed connector, so
+Wingman has no way to fetch fresh bot tokens at request time. We store the
+bot token at rest in `slack_credentials.bot_token` (separate table from
+`slack_workspaces` per blast-radius separation).
+
+### Storage rules for Slack (v0)
+
+1. **Bot tokens live in `slack_credentials`, never `slack_workspaces`.** The
+   credentials table has RLS enabled with NO policies — service_role bypass
+   only. Even a misconfigured RLS on `slack_workspaces` cannot expose the
+   token because it isn't there.
+
+2. **Service-role code paths only.** The only callers that read
+   `slack_credentials.bot_token` are server-side: the OAuth callback (insert)
+   and the `ingest-slack` cron (read). Never expose the credentials table
+   through a `.from('slack_credentials')` call in browser code or a hook.
+
+3. **On `SlackAuthError`** (token revoked / expired / invalid): set
+   `slack_workspaces.status = 'disconnected'` and `disconnected_at = now()`.
+   Cron skips disconnected workspaces. The user reconnects via the same
+   /settings → Connect Slack flow; the OAuth callback upserts the
+   credentials row with the new token.
+
+### v1 hardening
+
+This is a v0 deviation, not a permanent posture. v1 hardening tracks:
+
+- Enable `pgsodium` extension; encrypt `bot_token` column with
+  `crypto_aead_det_encrypt`. Cron pays a per-row decrypt cost but the
+  15-min cadence makes it negligible.
+- Add a KEK (key-encryption-key) row in `private.config` for rotation.
+
+### Why we picked separate table over plaintext on `slack_workspaces`
+
+Three options were considered before locking the separate-table approach:
+
+- (i) Plaintext column on `slack_workspaces` with RLS protection: simplest,
+  but a service-role key leak compromises all tokens, and any future
+  misconfigured RLS on the workspace row exposes the token.
+- (ii) Column-level encryption via `pgsodium`: right end state but
+  pgsodium readiness verify alone burns the v0 day budget.
+- (iii) Separate `slack_credentials` table, no RLS policies: chosen.
+  Blast-radius separation without a new crypto dep.
+
+Tracked in Tab 2's 2026-06-11 07:00 UTC lock. Established 2026-06-11
+(Slack Commit 3).
