@@ -1,15 +1,17 @@
 // GET /api/slack/oauth/start
 //
 // Entry point for the Slack workspace connect flow. Requires a Clerk session
-// (we can't attribute an incoming Slack workspace to a user otherwise).
+// (we attribute the incoming Slack workspace to a user, and the state mechanism
+// binds the OAuth roundtrip to that user's clerkUserId).
 //
 // Sequence:
-//   1. Gate on Clerk session — bounce to /sign-in if absent.
-//   2. Generate a random nonce, HMAC-sign it (see src/lib/slack/oauth.ts),
-//      stash the signed value in an HTTP-only cookie (10 min TTL).
-//   3. Redirect to Slack's consent page with the bare nonce as `state=`.
-//      Slack will echo it back to /callback, where we verify it against
-//      the cookie to defeat CSRF.
+//   1. Gate on Clerk session — bounce to /sign-in (with redirect_url) if absent.
+//   2. Generate a signed state value (`nonce.sig` bound to clerkUserId — see
+//      src/lib/slack/oauth.ts). NO cookie — multi-hostname Vercel deploys
+//      break cookie-bound CSRF state.
+//   3. Redirect to Slack's consent page with the signed state as `state=`.
+//      Slack echoes it back to /callback verbatim; callback re-fetches the
+//      clerkUserId from session and validates the HMAC.
 //
 // Scopes (bot-only, per the blast-radius lock — no user-token scopes):
 //   im:history  — read message history in DMs the bot is in
@@ -43,7 +45,7 @@ export async function GET() {
     );
   }
 
-  const { nonce, cookieValue } = generateState();
+  const state = generateState(userId);
 
   const slackAuthUrl = new URL("https://slack.com/oauth/v2/authorize");
   slackAuthUrl.searchParams.set("client_id", clientId);
@@ -52,18 +54,7 @@ export async function GET() {
     "redirect_uri",
     `${siteOrigin()}/api/slack/oauth/callback`,
   );
-  slackAuthUrl.searchParams.set("state", nonce);
+  slackAuthUrl.searchParams.set("state", state);
 
-  // NextResponse.redirect + .cookies.set keeps both the 302 Location header
-  // AND the Set-Cookie header in one response (cookies() from next/headers
-  // can't co-exist with a redirect in a single handler return).
-  const response = NextResponse.redirect(slackAuthUrl);
-  response.cookies.set("slack_oauth_state", cookieValue, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    maxAge: 600, // 10 minutes — Slack consent usually resolves in <60s
-    path: "/",
-  });
-  return response;
+  return NextResponse.redirect(slackAuthUrl);
 }

@@ -1,13 +1,17 @@
 // GET /api/slack/oauth/callback
 //
 // Slack redirects here after the user clicks "Allow" on the consent page.
-// We verify CSRF state, exchange the temporary `code` for a bot token, and
-// persist a (slack_workspaces, slack_credentials) pair scoped to the signed-in
-// Clerk user.
+// We verify the HMAC-signed state, exchange the temporary `code` for a bot
+// token, and persist a (slack_workspaces, slack_credentials) pair scoped to
+// the signed-in Clerk user.
 //
 // All exits land back at /settings with a query param the SettingsView reads
 // to show a toast (success / error class). The query params are intentionally
-// stable strings so Agent C's UI hook-up can switch on them.
+// stable strings so SettingsView can switch on them.
+//
+// State verification is COOKIELESS — see src/lib/slack/oauth.ts for why.
+// Callback re-fetches the clerkUserId from the session and recomputes the
+// HMAC; mismatch = state_invalid. No cookie reads, no cookie deletions.
 //
 // Re-connect semantics:
 //   - slack_workspaces.unique(user_id, team_id) means a re-connect of the
@@ -29,9 +33,8 @@ function redirectToSettings(req: NextRequest, query: string): NextResponse {
 }
 
 export async function GET(req: NextRequest) {
-  // 1. Clerk session gate. We attribute the workspace to a Supabase user_id,
-  //    so we can't proceed anonymously even though Slack already authenticated
-  //    the workspace half.
+  // 1. Clerk session gate. The state verification requires the clerkUserId
+  //    that signed the state, so unauthenticated users can't reach this path.
   const resolved = await resolveUser(req);
   if (!resolved.ok) {
     // Preserve callback URL so post-sign-in Clerk bounces back here with
@@ -41,7 +44,7 @@ export async function GET(req: NextRequest) {
     signIn.searchParams.set("redirect_url", callbackPath);
     return NextResponse.redirect(signIn);
   }
-  const { supabaseUserId } = resolved.user;
+  const { supabaseUserId, clerkUserId } = resolved.user;
 
   // 2. Query-string params from Slack.
   const code = req.nextUrl.searchParams.get("code");
@@ -53,30 +56,20 @@ export async function GET(req: NextRequest) {
   // we don't leak Slack-internal error strings (invalid_scope, etc.) into the URL.
   if (slackError) {
     const mapped = slackError === "access_denied" ? "access_denied" : "exchange_failed";
-    const fail = redirectToSettings(req, `slack_error=${mapped}`);
-    fail.cookies.delete("slack_oauth_state");
-    return fail;
+    return redirectToSettings(req, `slack_error=${mapped}`);
   }
   if (!code || !stateFromQuery) {
-    const fail = redirectToSettings(req, "slack_error=missing_params");
-    fail.cookies.delete("slack_oauth_state");
-    return fail;
+    return redirectToSettings(req, "slack_error=missing_params");
   }
 
-  // 3. CSRF: cookie set by /start carries the signed nonce.
-  const cookieValue = req.cookies.get("slack_oauth_state")?.value;
-  if (!cookieValue) {
-    return redirectToSettings(req, "slack_error=state_missing");
+  // 3. CSRF: verify the HMAC-signed state binds to THIS user's clerkUserId.
+  //    A leaked state for user A won't verify in user B's session because
+  //    the sig was computed over user A's clerkUserId.
+  if (!verifyState(stateFromQuery, clerkUserId)) {
+    return redirectToSettings(req, "slack_error=state_invalid");
   }
 
-  // 4. Verify HMAC. Bad sig / mismatched nonce → reject.
-  if (!verifyState(stateFromQuery, cookieValue)) {
-    const bad = redirectToSettings(req, "slack_error=state_invalid");
-    bad.cookies.delete("slack_oauth_state");
-    return bad;
-  }
-
-  // 5. Exchange code → bot token. Slack errors here are rare but possible
+  // 4. Exchange code → bot token. Slack errors here are rare but possible
   //    (code already used, code expired, invalid_client). Surface as a
   //    single 'exchange_failed' to the UI — the operator can dig into logs.
   let exchange;
@@ -86,12 +79,10 @@ export async function GET(req: NextRequest) {
     console.error("[slack:oauth:callback] exchangeCode failed", {
       message: err instanceof Error ? err.message : String(err),
     });
-    const fail = redirectToSettings(req, "slack_error=exchange_failed");
-    fail.cookies.delete("slack_oauth_state");
-    return fail;
+    return redirectToSettings(req, "slack_error=exchange_failed");
   }
 
-  // 6. Upsert slack_workspaces. onConflict targets the unique (user_id, team_id)
+  // 5. Upsert slack_workspaces. onConflict targets the unique (user_id, team_id)
   //    composite — a reconnect of the same team reuses the row and clears the
   //    disconnected_at marker.
   const supabase = makeSupabaseServerClient();
@@ -123,14 +114,12 @@ export async function GET(req: NextRequest) {
       teamId: exchange.team.id,
       message: workspaceErr?.message,
     });
-    const fail = redirectToSettings(req, "slack_error=workspace_write_failed");
-    fail.cookies.delete("slack_oauth_state");
-    return fail;
+    return redirectToSettings(req, "slack_error=workspace_write_failed");
   }
 
   const workspaceId = workspaceRow.id as string;
 
-  // 7. Upsert slack_credentials. workspace_id is PK, so the conflict target
+  // 6. Upsert slack_credentials. workspace_id is PK, so the conflict target
   //    is the natural key. Bot token always gets refreshed since reconnects
   //    return a new token.
   const { error: credErr } = await supabase
@@ -149,13 +138,9 @@ export async function GET(req: NextRequest) {
       workspaceId,
       message: credErr.message,
     });
-    const fail = redirectToSettings(req, "slack_error=credentials_write_failed");
-    fail.cookies.delete("slack_oauth_state");
-    return fail;
+    return redirectToSettings(req, "slack_error=credentials_write_failed");
   }
 
-  // 8. Success. Clear the one-time state cookie and bounce back to /settings.
-  const ok = redirectToSettings(req, "slack_connected=1");
-  ok.cookies.delete("slack_oauth_state");
-  return ok;
+  // 7. Success.
+  return redirectToSettings(req, "slack_connected=1");
 }

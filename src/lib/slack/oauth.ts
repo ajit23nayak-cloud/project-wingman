@@ -1,15 +1,28 @@
-// Slack OAuth helpers: token exchange + signed-cookie state nonce for CSRF.
+// Slack OAuth helpers: token exchange + HMAC-signed state for CSRF.
 //
-// State-nonce design (CSRF protection on the OAuth roundtrip):
-//   - /start generates a random nonce, signs it with HMAC-SHA256 keyed on
-//     CLERK_SECRET_KEY (no new secret to rotate), and sets `nonce.sig` in
-//     an HTTP-only cookie. Only the bare `nonce` goes to Slack as `state=`.
-//   - /callback reads the cookie, recomputes the HMAC over the nonce piece,
-//     and constant-time-compares against the cookie's sig piece. Then it
-//     verifies the query-string state equals the nonce.
-//   - This binds the callback to a browser that started the flow (cookie)
-//     AND to a state value Slack echoed back (query) — an attacker can't
-//     forge either half without CLERK_SECRET_KEY.
+// State design (CSRF protection on the OAuth roundtrip):
+//   - /start generates a random nonce, signs HMAC-SHA256 over
+//     `${clerkUserId}.${nonce}` keyed on CLERK_SECRET_KEY, and sends
+//     `${nonce}.${sig}` to Slack as the `state=` query param.
+//   - /callback re-fetches the clerkUserId from the current session,
+//     parses state on the `.` separator, recomputes the HMAC over
+//     `${clerkUserId}.${nonce}`, and constant-time-compares the sigs.
+//   - Binding state to clerkUserId means a captured state value can't be
+//     replayed in a different account — the sig won't match the attacker's
+//     clerkUserId. Attacker can't forge new states without CLERK_SECRET_KEY.
+//
+// Why cookieless: the previous cookie-bound design (cookie holds sig, URL
+// holds nonce) broke under Vercel's multi-hostname deploys. A user might
+// hit /start on a preview-deployment hostname, get the cookie set there,
+// then have Slack redirect them back to the production hostname where the
+// cookie isn't in the browser's jar for that origin. URL-only state with
+// HMAC verification is hostname-independent and works across any deploy
+// URL the redirect chain happens to traverse.
+//
+// Trade-off (vs cookie): state appears in URL/referrer logs. The HMAC
+// binding to clerkUserId mitigates: a leaked state for user A can't be
+// replayed by user B. v1 hardening would add a short-TTL consumed-states
+// table to also prevent replay within the same user account.
 //
 // Why CLERK_SECRET_KEY as the HMAC key: it's already a per-environment
 // secret guaranteed to exist on every route (Clerk auth depends on it),
@@ -54,44 +67,33 @@ function hmacHex(value: string, key: string): string {
   return createHmac("sha256", key).update(value).digest("hex");
 }
 
-// generateState: returns the bare nonce (goes to Slack as ?state=) plus the
-// signed cookie value (nonce.sig — goes into the HTTP-only cookie). Splitting
-// keeps the sig out of the URL/referrer logs.
-export function generateState(): { nonce: string; cookieValue: string } {
+// generateState: returns a single `nonce.sig` string to send to Slack as
+// `?state=...`. The sig binds the nonce to the Clerk user so a leaked state
+// can't be replayed by a different account (the callback recomputes the sig
+// using the recipient's clerkUserId; mismatch = reject).
+export function generateState(clerkUserId: string): string {
   const nonce = randomBytes(32).toString("hex");
-  const sig = hmacHex(nonce, getSigningKey());
-  return { nonce, cookieValue: `${nonce}.${sig}` };
+  const sig = hmacHex(`${clerkUserId}.${nonce}`, getSigningKey());
+  return `${nonce}.${sig}`;
 }
 
 // verifyState: returns true ONLY when
-//   - the cookie value parses as `nonce.sig`
-//   - the cookie's nonce matches the query string's state
-//   - the cookie's sig matches a fresh HMAC of the nonce (constant-time)
+//   - the state value parses as `nonce.sig`
+//   - the sig is a valid HMAC of `${clerkUserId}.${nonce}` with our key
 // Any mismatch / parse failure / length skew returns false (don't throw —
 // callers branch on truthy/falsy to pick the right redirect).
 export function verifyState(
   stateFromQuery: string,
-  cookieValue: string,
+  clerkUserId: string,
 ): boolean {
-  if (!stateFromQuery || !cookieValue) return false;
-  const dotIdx = cookieValue.indexOf(".");
-  if (dotIdx <= 0 || dotIdx === cookieValue.length - 1) return false;
-  const nonce = cookieValue.slice(0, dotIdx);
-  const sig = cookieValue.slice(dotIdx + 1);
+  if (!stateFromQuery || !clerkUserId) return false;
+  const dotIdx = stateFromQuery.indexOf(".");
+  if (dotIdx <= 0 || dotIdx === stateFromQuery.length - 1) return false;
+  const nonce = stateFromQuery.slice(0, dotIdx);
+  const sig = stateFromQuery.slice(dotIdx + 1);
 
-  // Constant-time nonce compare — `nonce !== stateFromQuery` leaks
-  // timing on attacker-supplied state values. Length-check first to
-  // satisfy timingSafeEqual's equal-length-buffers requirement.
-  const nonceBuf = Buffer.from(nonce);
-  const stateBuf = Buffer.from(stateFromQuery);
-  if (nonceBuf.length !== stateBuf.length) return false;
-  try {
-    if (!timingSafeEqual(nonceBuf, stateBuf)) return false;
-  } catch {
-    return false;
-  }
-
-  const expectedSig = hmacHex(nonce, getSigningKey());
+  const expectedSig = hmacHex(`${clerkUserId}.${nonce}`, getSigningKey());
+  // timingSafeEqual requires equal-length buffers — guard before calling.
   if (sig.length !== expectedSig.length) return false;
   try {
     return timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig));
