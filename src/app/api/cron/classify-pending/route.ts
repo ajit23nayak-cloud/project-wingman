@@ -5,10 +5,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 // POST /api/cron/classify-pending
 //
-// Mirror of fetch-bodies in spirit. Now processes TWO queues per firing per
-// Tab 2's Commit 4 lock (a) — two sequential claim calls, separate RPCs per
-// source, single classifier prompt + Gemini wrapper. Email batch first, Slack
-// batch second.
+// Mirror of fetch-bodies in spirit. Now processes THREE queues per firing per
+// Tab 2's Commit 4 + Commit 6 locks — three sequential claim calls, separate
+// RPCs per source, single classifier prompt + Gemini wrapper. Email batch
+// first, Slack batch second, Notion batch third.
 //
 // Email queue (existing):
 //   1. RPC public.claim_pending_classify_chunk atomically locks up to
@@ -22,16 +22,22 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 //   4. Per-row UPDATE: success → classification + reason + classified_at +
 //      status='processed'; failure → classification_error + status='failed'.
 //
-// Slack queue (new):
+// Slack queue:
 //   Same shape against slack_messages via claim_pending_classify_slack_chunk.
 //   classifyContent({ source: 'slack', ... }) injects a source-context
 //   addendum into the user prompt so the email-centric decision rules in the
 //   system prompt fall through to first-principles for DMs.
 //
+// Notion queue (new):
+//   Same shape against notion_pages via claim_pending_classify_notion_chunk.
+//   classifyContent({ source: 'notion', ... }) injects a Notion-specific
+//   preface. If the RPC doesn't exist yet (migration 0017 not applied) the
+//   batch returns EMPTY_METRICS so email + Slack still ship their numbers.
+//
 // Cadence (pg_cron) is once per minute. With CLASSIFY_CHUNK_SIZE=5 per source,
-// the queues drain at 300 rows/source/hour. Slack 15-min ingest produces a
-// far smaller backlog than email (5-50 DMs/day vs hundreds of emails) so
-// Slack drains nearly real-time.
+// each queue drains at 300 rows/source/hour. Slack and Notion both produce
+// far smaller backlogs than email (5-50 events/day vs hundreds of emails)
+// so they drain nearly real-time.
 
 export const runtime = "nodejs";
 
@@ -53,6 +59,16 @@ type ClaimedSlackRow = {
   sender_id: string;
   sender_name: string | null;
   text: string;
+};
+
+type ClaimedNotionRow = {
+  id: string;
+  user_id: string;
+  integration_id: string;
+  page_id: string;
+  title: string;
+  snippet: string;
+  last_edited_at: string;
 };
 
 type BatchMetrics = {
@@ -91,11 +107,13 @@ export async function POST(req: NextRequest) {
 
   const email = await processEmailBatch(supabase);
   const slack = await processSlackBatch(supabase);
+  const notion = await processNotionBatch(supabase);
 
   const elapsedMs = Date.now() - startedAt;
   console.log("[classify-pending:done]", {
     email: { claimed: email.claimed, classified: email.classified, failed: email.failed },
     slack: { claimed: slack.claimed, classified: slack.classified, failed: slack.failed },
+    notion: { claimed: notion.claimed, classified: notion.classified, failed: notion.failed },
     elapsedMs,
   });
 
@@ -103,6 +121,7 @@ export async function POST(req: NextRequest) {
     ok: true,
     email,
     slack,
+    notion,
     elapsedMs,
   });
 }
@@ -360,6 +379,137 @@ async function processSlackBatch(supabase: SupabaseClient): Promise<BatchMetrics
           .eq("id", claimedRow.id);
         if (updErr) {
           console.error("[classify-pending:slack:write] failure-update failed", {
+            id: claimedRow.id,
+            message: updErr.message,
+          });
+        }
+      }
+    }),
+  );
+
+  return metrics;
+}
+
+// ----------------------------------------------------------------------------
+// Notion batch
+// ----------------------------------------------------------------------------
+
+async function processNotionBatch(supabase: SupabaseClient): Promise<BatchMetrics> {
+  // --- Claim ---------------------------------------------------------------
+  // If migration 0017 hasn't been applied yet, the RPC won't exist — log + bail
+  // gracefully so the email + Slack batches (above) still ship their metrics.
+  const { data, error } = await supabase.rpc(
+    "claim_pending_classify_notion_chunk",
+    { p_limit: CLASSIFY_CHUNK_SIZE },
+  );
+  if (error) {
+    console.error("[classify-pending:notion:claim] rpc failed", {
+      message: error.message,
+    });
+    return EMPTY_METRICS;
+  }
+  const claimed = (data ?? []) as ClaimedNotionRow[];
+
+  if (claimed.length === 0) {
+    console.log("[classify-pending:notion:claim] queue empty");
+    return EMPTY_METRICS;
+  }
+
+  // --- Lookup user emails -------------------------------------------------
+  const userIds = Array.from(new Set(claimed.map((r) => r.user_id)));
+  const { data: userRows, error: usersErr } = await supabase
+    .from("users")
+    .select("id, email")
+    .in("id", userIds);
+  if (usersErr || !userRows) {
+    console.error("[classify-pending:notion:users] lookup failed", {
+      message: usersErr?.message ?? "no_rows",
+    });
+    return { ...EMPTY_METRICS, claimed: claimed.length, failed: claimed.length };
+  }
+  const emailByUserId = new Map<string, string>();
+  for (const u of userRows) emailByUserId.set(u.id, u.email);
+
+  // --- Classify in parallel ----------------------------------------------
+  const results = await Promise.allSettled(
+    claimed.map(async (row) => {
+      const userEmail = emailByUserId.get(row.user_id);
+      if (!userEmail) {
+        throw new Error(`no_user_email_for_user_id:${row.user_id}`);
+      }
+      const { result, usage } = await classifyContent({
+        source: "notion",
+        pageTitle: row.title,
+        snippet: row.snippet,
+        lastEditedAt: row.last_edited_at,
+        userEmail,
+      });
+      return { row, result, usage };
+    }),
+  );
+
+  // --- Write-back + tally -------------------------------------------------
+  // notion_pages mirrors slack_messages: classified_at is timestamptz (ISO
+  // string), not bigint epoch ms like the emails table.
+  const metrics: BatchMetrics = {
+    claimed: claimed.length,
+    classified: 0,
+    failed: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    samples: [],
+  };
+
+  await Promise.all(
+    results.map(async (settled, idx) => {
+      const claimedRow = claimed[idx];
+      if (settled.status === "fulfilled") {
+        const { result, usage } = settled.value;
+        metrics.totalInputTokens += usage.inputTokens ?? 0;
+        metrics.totalOutputTokens += usage.outputTokens ?? 0;
+        const { error: updErr } = await supabase
+          .from("notion_pages")
+          .update({
+            classification: result.classification,
+            classification_reason: result.reason,
+            classification_error: null,
+            classified_at: new Date().toISOString(),
+            status: "processed",
+          })
+          .eq("id", claimedRow.id);
+        if (updErr) {
+          metrics.failed++;
+          console.error("[classify-pending:notion:write] success-update failed", {
+            id: claimedRow.id,
+            message: updErr.message,
+          });
+        } else {
+          metrics.classified++;
+          metrics.samples.push({
+            id: claimedRow.id,
+            classification: result.classification,
+            reason: result.reason,
+          });
+        }
+      } else {
+        metrics.failed++;
+        const detail =
+          settled.reason instanceof Error
+            ? settled.reason.message
+            : String(settled.reason);
+        console.error("[classify-pending:notion:llm] classify failed", {
+          id: claimedRow.id,
+          message: detail,
+        });
+        const { error: updErr } = await supabase
+          .from("notion_pages")
+          .update({
+            classification_error: detail.slice(0, 500),
+            status: "failed",
+          })
+          .eq("id", claimedRow.id);
+        if (updErr) {
+          console.error("[classify-pending:notion:write] failure-update failed", {
             id: claimedRow.id,
             message: updErr.message,
           });

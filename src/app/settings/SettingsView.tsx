@@ -22,6 +22,7 @@ import { useSWRConfig } from "swr";
 import {
   useMe,
   useSlackWorkspace,
+  useNotionIntegration,
   useStorageTierPreview,
   useUpdateStorageTier,
   type StorageTierPreview,
@@ -99,17 +100,21 @@ export function SettingsView() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [typeConfirm, setTypeConfirm] = useState("");
 
-  // Slack OAuth callback toast — landing back on /settings?slack_connected=1
-  // (success) or /settings?slack_error=<code> (failure). Surfaces a toast
-  // via the same successMessage / error slots used by tier-change, then
-  // clears the query string so a refresh doesn't re-trigger the toast.
+  // Slack + Notion OAuth callback toast — landing back on
+  // /settings?slack_connected=1 (or notion_connected=1) on success, or
+  // /settings?slack_error=<code> (or notion_error=<code>) on failure.
+  // Surfaces a toast via the same successMessage / error slots used by
+  // tier-change, then clears the query string so a refresh doesn't
+  // re-trigger the toast.
   const searchParams = useSearchParams();
   const router = useRouter();
   const { mutate: swrMutate } = useSWRConfig();
   useEffect(() => {
-    const ok = searchParams.get("slack_connected");
-    const err = searchParams.get("slack_error");
-    if (ok) {
+    const slackOk = searchParams.get("slack_connected");
+    const slackErr = searchParams.get("slack_error");
+    const notionOk = searchParams.get("notion_connected");
+    const notionErr = searchParams.get("notion_error");
+    if (slackOk) {
       setSuccessMessage("Slack workspace connected.");
       // Invalidate the slack_workspace SWR key so the card flips to
       // "Connected" without a manual refresh. Match-by-prefix so we hit
@@ -121,8 +126,19 @@ export function SettingsView() {
         { revalidate: true },
       );
       router.replace("/settings");
-    } else if (err) {
-      setError(`Slack connection failed: ${err}`);
+    } else if (slackErr) {
+      setError(`Slack connection failed: ${slackErr}`);
+      router.replace("/settings");
+    } else if (notionOk) {
+      setSuccessMessage("Notion workspace connected.");
+      swrMutate(
+        (key) => Array.isArray(key) && key[0] === "notion_integration",
+        undefined,
+        { revalidate: true },
+      );
+      router.replace("/settings");
+    } else if (notionErr) {
+      setError(`Notion connection failed: ${notionErr}`);
       router.replace("/settings");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -327,8 +343,9 @@ export function SettingsView() {
             alongside your email.
           </p>
 
-          <div className="mt-6">
+          <div className="mt-6 space-y-4">
             <SlackIntegrationCard />
+            <NotionIntegrationCard />
           </div>
         </section>
       </div>
@@ -625,6 +642,118 @@ function SlackIntegrationCard() {
           {workspace.last_polled_at && (
             <p className="mt-0.5 text-xs text-gray-500">
               Last sync: {formatRelative(workspace.last_polled_at)}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Simple Notion-style page mark — distinguishable from the Slack rainbow at a
+// glance (single solid color, page-icon silhouette). Deliberately not the
+// exact brand wordmark — keeps us out of brand-asset compliance for v0 while
+// remaining recognizable next to the Slack glyph.
+function NotionIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path d="M5 3h10l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm9 1.5V8h3.5L14 4.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z" />
+    </svg>
+  );
+}
+
+function NotionIntegrationCard() {
+  const { data: integration, isLoading } = useNotionIntegration();
+
+  if (isLoading) {
+    return <p className="text-sm text-gray-500">Loading…</p>;
+  }
+
+  // Not connected.
+  if (!integration) {
+    return (
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+        <div className="flex items-start gap-3">
+          <NotionIcon className="mt-0.5 h-6 w-6" />
+          <div>
+            <div className="text-sm font-semibold text-gray-900">Notion</div>
+            <p className="mt-1 text-sm text-gray-600">
+              Connect a Notion workspace so Wingman classifies recent page
+              edits alongside email.
+            </p>
+          </div>
+        </div>
+        <a
+          href="/api/notion/oauth/start"
+          className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+        >
+          Connect Notion
+        </a>
+      </div>
+    );
+  }
+
+  // Connected — disconnected token (revoked / expired).
+  if (integration.status === "disconnected") {
+    return (
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+        <div className="flex items-start gap-3">
+          <NotionIcon className="mt-0.5 h-6 w-6" />
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-900">
+                Notion — {integration.workspace_name ?? integration.workspace_id}
+              </span>
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">
+                Disconnected
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-gray-600">
+              Notion token expired or revoked.
+            </p>
+            {integration.disconnected_at && (
+              <p className="mt-1 text-xs text-gray-500">
+                Disconnected {formatRelative(integration.disconnected_at)}
+              </p>
+            )}
+          </div>
+        </div>
+        <a
+          href="/api/notion/oauth/start"
+          className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+        >
+          Reconnect Notion
+        </a>
+      </div>
+    );
+  }
+
+  // Connected + active.
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+      <div className="flex items-start gap-3">
+        <NotionIcon className="mt-0.5 h-6 w-6" />
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-gray-900">
+              Notion — {integration.workspace_name ?? integration.workspace_id}
+            </span>
+            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800">
+              Connected
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-gray-600">
+            Connected {formatRelative(integration.connected_at)}
+          </p>
+          {integration.last_polled_at && (
+            <p className="mt-0.5 text-xs text-gray-500">
+              Last sync: {formatRelative(integration.last_polled_at)}
             </p>
           )}
         </div>

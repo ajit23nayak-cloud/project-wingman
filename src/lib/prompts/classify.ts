@@ -115,13 +115,13 @@ FEW-SHOT EXAMPLES
 // `{ inputTokens?: number, outputTokens?: number, totalTokens?: number }`
 // with all fields optional. We propagate the optionality up to callers.
 //
-// Multi-source classification: same SYSTEM_PROMPT for both Gmail emails and
-// Slack DMs, but the USER prompt is source-shaped. Slack DMs get a brief
-// source-context preface telling the model that most email-specific decision
-// rules don't apply (no mailer-daemon bounces, no LinkedIn job alerts, no
-// marketing blasts in 1:1 DMs) and to fall through to first-principles. Per
-// Tab 2's Commit 4 lock: "single classifier with source-aware prompt addendum"
-// — don't fork the system prompt.
+// Multi-source classification: same SYSTEM_PROMPT for Gmail emails, Slack
+// DMs, and Notion page edits, but the USER prompt is source-shaped. Each
+// non-Gmail source gets a brief source-context preface telling the model
+// that most email-specific decision rules don't apply and to fall through
+// to first-principles framing for that source. Per Tab 2's Commit 4 lock:
+// "single classifier with source-aware prompt addendum" — don't fork the
+// system prompt.
 export type ClassifyInput =
   | {
       source: "gmail";
@@ -136,6 +136,13 @@ export type ClassifyInput =
       senderId: string;
       channelId: string;
       text: string;
+      userEmail: string;
+    }
+  | {
+      source: "notion";
+      pageTitle: string;
+      snippet: string;
+      lastEditedAt: string;
       userEmail: string;
     };
 
@@ -154,7 +161,7 @@ From: ${input.fromAddress}
 Subject: ${input.subject}
 Snippet: ${(input.snippet ?? "").slice(0, 500)}
 Founder's email: ${input.userEmail}`;
-  } else {
+  } else if (input.source === "slack") {
     const sender = input.senderName ?? input.senderId;
     userPrompt = `Classify this Slack DM.
 
@@ -169,6 +176,21 @@ DM:
 From: ${sender}
 Channel: ${input.channelId}
 Message: ${input.text.slice(0, 500)}
+Founder's email: ${input.userEmail}`;
+  } else {
+    userPrompt = `Classify this Notion page edit.
+
+SOURCE CONTEXT: This is a Notion page (or page edit notification), not an email or a 1:1 DM. The decision rules above are email-centric — most don't directly apply. Notion content is project / planning / writing context. Fall through to:
+
+- URGENT: a page the founder needs to action TODAY (status updates from co-founder marked decision-pending, urgent project notes, deadlines in the page body).
+- IMPORTANT: meaningful project work — investor updates, hiring pipeline, customer call notes, decision documents that the founder is the writer or reader of.
+- FYI: passive context the founder maintains — note templates, archive material, completed work logs.
+- ARCHIVE: stale templates, exported content with no project relevance, automated journal entries.
+
+PAGE:
+Title: ${input.pageTitle}
+Last edited: ${input.lastEditedAt}
+Snippet: ${input.snippet.slice(0, 500)}
 Founder's email: ${input.userEmail}`;
   }
 

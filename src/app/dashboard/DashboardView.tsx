@@ -21,11 +21,14 @@ import {
   useEscalationCount7d,
   useSlackWorkspace,
   useSlackMessages,
+  useNotionIntegration,
+  useNotionPages,
   markNudgeWidgetSeen,
   type Counts,
   type FilterValue,
   type EmailRow,
   type SlackMessageRow,
+  type NotionPageRow,
 } from "@/lib/supabase/hooks";
 
 const ONBOARDING_DISMISS_KEY = "wingman_onboarding_dismissed";
@@ -178,6 +181,65 @@ function SlackMessageRowView({ message }: { message: SlackMessageRow }) {
   );
 }
 
+// Simple page-icon glyph for Notion rows. Single solid color (not the brand
+// wordmark) — distinguishable from Slack's rainbow at a glance without
+// invoking brand-asset compliance for v0.
+function NotionPageIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path d="M5 3h10l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm9 1.5V8h3.5L14 4.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z" />
+    </svg>
+  );
+}
+
+// Notion page row. Mirrors the SlackMessageRowView aesthetic — same border,
+// padding, badge styling. When the page has a non-null url, the whole row is
+// a target=_blank anchor so a click opens the page in Notion. When url is
+// null (rare; row stored before url was populated), the row is non-clickable
+// so the user isn't sent to a broken link.
+function NotionPageRowView({ page }: { page: NotionPageRow }) {
+  const badgeClass = BADGE_STYLES[page.classification];
+  const content = (
+    <div className="flex items-center gap-3 rounded-md border border-gray-100 bg-white px-3 py-2 hover:border-gray-300">
+      <NotionPageIcon className="h-4 w-4 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium text-gray-900">
+            {page.title || "(untitled page)"}
+          </span>
+          <span
+            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase ${badgeClass}`}
+          >
+            {page.classification}
+          </span>
+        </div>
+        <p className="mt-0.5 truncate text-xs text-gray-600">{page.snippet}</p>
+      </div>
+      <span className="shrink-0 text-xs text-gray-500">
+        {formatEmailTime(page.received_at)}
+      </span>
+    </div>
+  );
+  return page.url ? (
+    <a
+      href={page.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block"
+    >
+      {content}
+    </a>
+  ) : (
+    content
+  );
+}
+
 const ERROR_MESSAGES: Record<string, string> = {
   not_authenticated: "You need to sign in.",
   no_google_token:
@@ -206,6 +268,12 @@ export function DashboardView() {
   const { data: slackWorkspace, isLoading: slackWorkspaceLoading } =
     useSlackWorkspace();
   const { data: slackMessages } = useSlackMessages(filter);
+  const { data: notionIntegration, isLoading: notionIntegrationLoading } =
+    useNotionIntegration();
+  // Pass null filter when no Notion integration exists so the SWR key
+  // stays null and the query never fires — avoids wasted bandwidth on
+  // users who haven't connected Notion.
+  const { data: notionPages } = useNotionPages(notionIntegration ? filter : null);
   const nudges = useNudges();
   const emailsHook = useEmails(filter, PAGE_SIZE);
 
@@ -416,6 +484,34 @@ export function DashboardView() {
             <Link
               href="/settings"
               className="rounded-md bg-purple-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-800 shrink-0"
+            >
+              Open Settings
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Connect Notion banner — LOWER priority than the Slack banner. Only
+          shown when Notion is NOT connected AND Slack IS connected, so we
+          never stack two "connect something" banners at once. When both
+          integrations are missing, the Slack banner above takes precedence;
+          the Notion banner appears on the next dashboard visit after Slack
+          is connected. */}
+      {!notionIntegrationLoading && !notionIntegration && slackWorkspace && (
+        <div className="max-w-4xl mx-auto mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-amber-900">
+                Connect Notion
+              </p>
+              <p className="mt-1 text-xs text-amber-800">
+                Pull your recent Notion page edits into Wingman&apos;s
+                classifier alongside email and Slack.
+              </p>
+            </div>
+            <Link
+              href="/settings"
+              className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-800 shrink-0"
             >
               Open Settings
             </Link>
@@ -711,6 +807,23 @@ export function DashboardView() {
             <div className="space-y-1">
               {slackMessages.map((m) => (
                 <SlackMessageRowView key={m.id} message={m} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Notion Pages section — sits below Slack DMs, shares the activeFilter.
+            v0 limit: 20 most-recent classified pages, no pagination. Hidden
+            when no Notion integration is connected (banner above covers CTA).
+            Each row links out to the original page in Notion (target=_blank). */}
+        {notionIntegration && notionPages && notionPages.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-sm font-semibold text-gray-700 mb-2">
+              Notion Pages
+            </h2>
+            <div className="space-y-1">
+              {notionPages.map((p) => (
+                <NotionPageRowView key={p.id} page={p} />
               ))}
             </div>
           </section>

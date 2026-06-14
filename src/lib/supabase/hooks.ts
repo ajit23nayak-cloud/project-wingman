@@ -318,6 +318,97 @@ export function useSlackMessages(filter: FilterValue) {
   );
 }
 
+// --- Notion integration -----------------------------------------------------
+
+// Pinned shape from supabase.from('notion_integrations').select(...) — RLS-scoped
+// to the current user via the standard own-rows policy on notion_integrations.
+// Returns an array; v0 supports one workspace per user, so we read row[0] or
+// null. Future v1 multi-workspace returns the full array. Mirrors the
+// useSlackWorkspace shape — same Connect/Disconnected/Reconnect surface.
+export type NotionIntegrationRow = {
+  id: string;
+  workspace_id: string;
+  workspace_name: string | null;
+  workspace_icon: string | null;
+  bot_id: string | null;
+  status: "active" | "disconnected";
+  connected_at: string;
+  disconnected_at: string | null;
+  last_polled_at: string | null;
+};
+
+export function useNotionIntegration() {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<NotionIntegrationRow | null>(
+    me ? ["notion_integration", me.supabaseUserId] : null,
+    async () => {
+      const { data, error } = await supabase
+        .from("notion_integrations")
+        .select(
+          "id, workspace_id, workspace_name, workspace_icon, bot_id, status, connected_at, disconnected_at, last_polled_at",
+        )
+        .order("connected_at", { ascending: false })
+        .limit(1);
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as NotionIntegrationRow[];
+      return rows[0] ?? null;
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+// --- Notion pages (classifier list) -----------------------------------------
+
+// Pinned shape from supabase.from('notion_pages').select(...) — RLS-scoped by
+// the notion_pages_select_own policy. classification is non-null in the result
+// set because we filter status='processed' AND classification IS NOT NULL.
+// received_at is epoch ms (matches slack_messages.received_at and
+// emails.received_at — uniform sort key across all three sources).
+export type NotionPageRow = {
+  id: string;
+  integration_id: string;
+  page_id: string;
+  title: string;
+  snippet: string;
+  url: string | null;
+  classification: NonNullable<EmailRow["classification"]>;
+  classification_reason: string | null;
+  received_at: number;
+};
+
+// useNotionPages accepts `FilterValue | null`. Pass `null` when no Notion
+// integration exists so the SWR key is null and the query never fires —
+// avoids the "reactive query amplification" anti-pattern where the hook
+// would issue a Supabase query every dashboard mount + every filter change
+// even for users without Notion (RLS returns 0 rows, but it's wasted bandwidth).
+export function useNotionPages(filter: FilterValue | null) {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<NotionPageRow[]>(
+    me && filter ? ["notion_pages", filter, me.supabaseUserId] : null,
+    async () => {
+      let query = supabase
+        .from("notion_pages")
+        .select(
+          "id, integration_id, page_id, title, snippet, url, classification, classification_reason, received_at",
+        )
+        .eq("status", "processed")
+        .not("classification", "is", null)
+        .order("received_at", { ascending: false })
+        .limit(20);
+      // filter is non-null inside the fetcher (gated above), but TS doesn't
+      // narrow through the key fn. Defensive check + narrow.
+      if (filter && filter !== "all") {
+        query = query.eq("classification", filter);
+      }
+      const { data, error } = await query;
+      if (error) throw new Error(error.message);
+      return (data ?? []) as NotionPageRow[];
+    },
+  );
+}
+
 // --- single email + draft ---------------------------------------------------
 
 // Pinned response shape from `supabase.from('emails').select('*, drafts(*)')
