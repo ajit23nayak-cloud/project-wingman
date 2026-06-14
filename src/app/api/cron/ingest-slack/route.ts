@@ -53,6 +53,7 @@ type WorkspaceRow = {
 type CredentialRow = {
   workspace_id: string;
   bot_token: string;
+  user_token: string | null;
 };
 
 type InsertRow = {
@@ -105,6 +106,7 @@ export async function POST(req: NextRequest) {
       workspacesProcessed: 0,
       messagesUpserted: 0,
       workspacesDisconnected: 0,
+      workspacesSkippedNoUserToken: 0,
       elapsedMs: Date.now() - startedAt,
     });
   }
@@ -112,7 +114,7 @@ export async function POST(req: NextRequest) {
   const workspaceIds = workspaces.map((w) => w.id);
   const { data: credRows, error: credErr } = await supabase
     .from("slack_credentials")
-    .select("workspace_id, bot_token")
+    .select("workspace_id, bot_token, user_token")
     .in("workspace_id", workspaceIds);
 
   if (credErr) {
@@ -125,25 +127,33 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const tokenByWorkspace = new Map<string, string>();
+  // Ingest uses USER token (xoxp-...) not bot token. Bot tokens with
+  // im:history can only read DMs where the bot is a participant — they
+  // can't read the user's 1:1 DMs with other humans, which is the whole
+  // ingest premise. See /api/slack/oauth/start comment for the rationale.
+  const userTokenByWorkspace = new Map<string, string>();
   for (const c of (credRows ?? []) as CredentialRow[]) {
-    tokenByWorkspace.set(c.workspace_id, c.bot_token);
+    if (c.user_token) userTokenByWorkspace.set(c.workspace_id, c.user_token);
   }
 
   // --- Per-workspace serial loop ------------------------------------------
   let workspacesProcessed = 0;
   let messagesUpserted = 0;
   let workspacesDisconnected = 0;
+  let workspacesSkippedNoUserToken = 0;
 
   for (const ws of workspaces) {
-    const botToken = tokenByWorkspace.get(ws.id);
-    if (!botToken) {
-      // Credentials row missing — log and skip. Reconnect flow should
-      // re-insert. Don't flip status; keep status='active' so a later
-      // OAuth completion can re-attach without an extra repair step.
-      console.error("[ingest-slack:workspace] missing credentials, skipping", {
+    const userToken = userTokenByWorkspace.get(ws.id);
+    if (!userToken) {
+      // Either credentials row missing entirely, OR row exists but has only
+      // bot_token (pre-fix install, before user_scope was requested). Skip
+      // and log — workspace stays status='active' so the user can re-OAuth
+      // (which will populate user_token), no manual repair needed.
+      console.warn("[ingest-slack:workspace] missing user_token, needs reconnect", {
         workspaceId: ws.id,
+        teamId: ws.team_id,
       });
+      workspacesSkippedNoUserToken += 1;
       continue;
     }
 
@@ -154,7 +164,7 @@ export async function POST(req: NextRequest) {
 
     try {
       // --- 1. Discover IM channels ---------------------------------------
-      const channels = await listImChannels(botToken);
+      const channels = await listImChannels(userToken);
 
       // --- 2. Paginate history per channel; collect raw messages --------
       const collected: { channelId: string; msg: SlackMessage }[] = [];
@@ -163,7 +173,7 @@ export async function POST(req: NextRequest) {
         let pages = 0;
         do {
           const { messages, nextCursor } = await fetchConversationHistory(
-            botToken,
+            userToken,
             ch.id,
             oldestSec,
             cursor,
@@ -195,7 +205,7 @@ export async function POST(req: NextRequest) {
       const senderIds = Array.from(new Set(eligible.map(({ msg }) => msg.user)));
       const senderNameById =
         senderIds.length > 0
-          ? await usersInfo(botToken, senderIds)
+          ? await usersInfo(userToken, senderIds)
           : new Map<string, string>();
 
       // --- 5. Build insert rows ------------------------------------------
@@ -321,6 +331,7 @@ export async function POST(req: NextRequest) {
     workspacesProcessed,
     messagesUpserted,
     workspacesDisconnected,
+    workspacesSkippedNoUserToken,
     elapsedMs,
   });
 
@@ -329,6 +340,7 @@ export async function POST(req: NextRequest) {
     workspacesProcessed,
     messagesUpserted,
     workspacesDisconnected,
+    workspacesSkippedNoUserToken,
     elapsedMs,
   });
 }

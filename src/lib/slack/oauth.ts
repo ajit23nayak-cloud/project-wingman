@@ -35,7 +35,15 @@ export type SlackOAuthExchangeResult = {
   ok: boolean;
   team: { id: string; name: string };
   bot: { token: string; user_id: string };
+  // Slack v2 OAuth optionally returns authed_user.access_token when the
+  // start URL includes user_scope=. Wingman's ingest path needs this — bot
+  // tokens can't read the user's 1:1 DMs with other humans, only DMs where
+  // the bot is a participant. user_token may be null on legacy installs
+  // (workspaces connected before the user-scope fix landed); the ingest
+  // cron treats null as "needs reconnect" and skips.
+  userToken: string | null;
   scope: string;
+  userScope: string;
   raw: unknown;
 };
 
@@ -103,19 +111,26 @@ export function verifyState(
 }
 
 // exchangeCode: POSTs Slack's oauth.v2.access endpoint to swap the temporary
-// `code` from the callback into a long-lived bot token. Slack returns:
+// `code` for the install's long-lived tokens. With user_scope= on the start
+// URL, Slack returns BOTH a bot token (top-level access_token, xoxb-...) AND
+// a user token (authed_user.access_token, xoxp-...):
 //   {
 //     ok: true,
-//     access_token: "xoxb-...",   // bot token (we store this)
+//     access_token: "xoxb-...",   // bot token
 //     token_type: "bot",
 //     scope: "im:history,im:read,users:read,team:read",
 //     bot_user_id: "U...",
 //     team: { id, name },
-//     authed_user: { id, ... },   // ignored — we don't request user-token scopes
+//     authed_user: {
+//       id: "U...",
+//       scope: "im:history,im:read,users:read",
+//       access_token: "xoxp-..."  // user token — ingest cron uses this
+//     },
 //     ...
 //   }
-// We project into SlackOAuthExchangeResult and keep the raw json on `raw`
-// for callback-side logging if we need it.
+// Wingman's ingest path uses the USER token to read the user's 1:1 DMs.
+// Bot token is kept for any future bot-specific API surface (status,
+// presence pings, etc.). Both flow into slack_credentials.
 export async function exchangeCode(
   code: string,
 ): Promise<SlackOAuthExchangeResult> {
@@ -148,6 +163,11 @@ export async function exchangeCode(
     bot_user_id?: string;
     scope?: string;
     team?: { id?: string; name?: string };
+    authed_user?: {
+      id?: string;
+      scope?: string;
+      access_token?: string;
+    };
   };
 
   if (!json.ok) {
@@ -169,7 +189,11 @@ export async function exchangeCode(
       token: json.access_token,
       user_id: json.bot_user_id,
     },
+    // null when the Slack manifest doesn't grant any user scopes — we log
+    // and the ingest cron treats this workspace as "needs reconnect."
+    userToken: json.authed_user?.access_token ?? null,
     scope: json.scope ?? "",
+    userScope: json.authed_user?.scope ?? "",
     raw: json,
   };
 }

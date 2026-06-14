@@ -120,14 +120,29 @@ export async function GET(req: NextRequest) {
   const workspaceId = workspaceRow.id as string;
 
   // 6. Upsert slack_credentials. workspace_id is PK, so the conflict target
-  //    is the natural key. Bot token always gets refreshed since reconnects
-  //    return a new token.
+  //    is the natural key. Both tokens always get refreshed since reconnects
+  //    return fresh values. user_token is the load-bearing piece for ingest
+  //    (see /start route comment for why bot tokens can't read user DMs).
+  //
+  //    Log + warn if user_token is null — that means the Slack manifest
+  //    is misconfigured (no user_scope set) and ingest will skip this
+  //    workspace on every firing until the manifest is fixed and the user
+  //    reconnects. We don't fail the OAuth flow because the bot install
+  //    can still proceed; we just won't ingest until reconnect.
+  if (!exchange.userToken) {
+    console.warn("[slack:oauth:callback] no user_token in exchange — ingest will skip", {
+      workspaceId,
+      teamId: exchange.team.id,
+      userScope: exchange.userScope,
+    });
+  }
   const { error: credErr } = await supabase
     .from("slack_credentials")
     .upsert(
       {
         workspace_id: workspaceId,
         bot_token: exchange.bot.token,
+        user_token: exchange.userToken,
         updated_at: nowIso,
       },
       { onConflict: "workspace_id", ignoreDuplicates: false },

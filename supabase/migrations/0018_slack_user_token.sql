@@ -1,0 +1,39 @@
+-- Slack credentials: add user_token column.
+--
+-- Tab 2 verification on 2026-06-14 surfaced that 0 messages had been ingested
+-- across 13 hours of 15-min cron firings since OAuth went live. Root cause:
+-- the Slack manifest the foundation work configured uses BOT scopes
+-- (im:history, im:read, users:read, team:read). Bot tokens with im:history can
+-- only read DMs where the bot is a participant — they cannot read the user's
+-- 1:1 DMs with other humans. For Wingman's promise of "ingest your DMs",
+-- we need USER token scopes — i.e. the authed_user.access_token in Slack's
+-- oauth.v2.access response, gated by `user_scope=` on the OAuth start URL.
+--
+-- This migration adds the user_token column on slack_credentials. The OAuth
+-- callback writes both bot_token (existing column, kept for any future
+-- bot-specific API calls) and user_token (this column, used by the ingest
+-- cron for conversations.list / history / users.info).
+--
+-- Nullable on purpose: existing slack_credentials rows from the pre-fix world
+-- have bot_token set but no user_token. The ingest cron treats a workspace
+-- with null user_token as "needs reconnect" — skips it and logs. After the
+-- user re-OAuths through the updated /start route (which now requests both
+-- bot AND user scopes), user_token populates and the next cron firing
+-- ingests normally.
+--
+-- VERIFICATION QUERIES (paste output in commit body per CONVENTIONS.md rule 4):
+--   -- column exists with correct nullability
+--   select column_name, data_type, is_nullable, column_default
+--   from information_schema.columns
+--   where table_schema = 'public'
+--     and table_name = 'slack_credentials'
+--     and column_name = 'user_token';
+--
+--   -- existing row populates user_token as null until re-OAuth
+--   select workspace_id,
+--          bot_token is not null as has_bot_token,
+--          user_token is not null as has_user_token
+--   from slack_credentials;
+
+alter table public.slack_credentials
+  add column if not exists user_token text;
