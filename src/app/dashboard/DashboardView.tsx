@@ -11,6 +11,8 @@ import { useRouter } from "next/navigation";
 import { useUser, UserButton } from "@clerk/nextjs";
 import { HelpMeThinkModal } from "@/app/_components/HelpMeThinkModal";
 import { CalendarTodayView } from "./CalendarTodayView";
+import { CadenceFlagsView } from "./CadenceFlagsView";
+import { DecisionsPostmortemDueView } from "./DecisionsPostmortemDueView";
 import {
   useMe,
   useCounts,
@@ -437,8 +439,14 @@ export function DashboardView() {
         </div>
       </header>
 
-      {/* Today's Calendar sits at the TOP of the dashboard per Tab 2 06:05 UTC
-          spec — calendar is the highest time-sensitivity signal for a founder,
+      {/* Section order from top per Tab 2 09:35 UTC architectural lock:
+          Cadence flags → Decisions due for postmortem → Today's Calendar →
+          banners → email/Slack/Notion. The two CRM sections render ONLY when
+          non-empty (silent loading + silent empty per Tab 1 D5). */}
+      <CadenceFlagsView />
+      <DecisionsPostmortemDueView />
+
+      {/* Today's Calendar — highest time-sensitivity signal for a founder,
           ahead of Gmail-reauth/Slack/Notion banners and ahead of the email list. */}
       <CalendarTodayView />
 

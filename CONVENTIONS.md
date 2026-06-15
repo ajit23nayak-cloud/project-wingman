@@ -154,6 +154,58 @@ between the two tabs.
    advance, and responding to `@AJIT:` flags. He should not need to
    paste-block content between tabs anymore.
 
+6. **Log entry must be appended in the SAME session as the ship action.**
+   For Tab 1: the structured `## [TIMESTAMP UTC | Tab 1] <SHA> SHIPPED`
+   entry goes in the same chat session as the `git push`. For Tab 2: the
+   verification entry goes in the same session as the verification run.
+   If a session ends without logging the action that happened in it,
+   **the first action of the next session is to backfill the missing
+   entry — before any new work, before responding to Ajit, before reading
+   inbound flags.** Backfilled entries use the original ship timestamp
+   (from `git log` for Tab 1, from the verification run timestamp for
+   Tab 2), not the backfill time, so the chronological reconstruction
+   stays honest. Add a one-line "(backfilled at <TIMESTAMP UTC>)" note
+   below the H2 header so the audit trail is explicit.
+
+7. **Log entry is part of the ship checklist, not a separate step.**
+   Tab 1's ship sequence is: build green → verification queries pasted
+   in commit body → push → **log entry appended** → THEN report to Ajit
+   in chat. Do not report a ship to Ajit before the log entry is in
+   place; the chat summary and the log entry are not interchangeable.
+   Tab 2's verification sequence is: REST/curl receipts captured →
+   browser-driven confirmation → **log entry appended** → THEN report
+   to Ajit. The chat output to Ajit is a courtesy summary; the log
+   entry is the durable record both tabs reference back to.
+
+8. **Log entry writes must use shell append (`cat >> coordination/log.md
+   << 'EOF' ... EOF`).** Do NOT use the Edit tool, the Write tool, or any
+   read-modify-write pattern on `coordination/log.md`. Append-only at
+   the kernel level is the only race-free path between two concurrent
+   tabs. Edit fails silently when its `old_string` anchor no longer
+   matches (because the other tab appended in the meantime); Write
+   clobbers whatever was added since the last read. Both failure modes
+   look like "I successfully wrote" from inside the tool while the
+   durable file shows nothing landed. Verification step after every
+   append: immediately re-read the tail and confirm your new H2 header
+   is visible. If it isn't, retry. Edit/Write on `coordination/log.md`
+   is forbidden except for protocol-level structural changes to the file
+   header (rare, coordinate via Ajit).
+
+9. **Third-party integration pre-spec checklist must enumerate both the
+   OAuth-flow surface AND the API-service surface.** Today's Calendar
+   build surfaced two distinct configuration surfaces that both must be
+   provisioned BEFORE first OAuth attempt: (a) the OAuth flow surface
+   (client_id, client_secret, redirect URIs, consent-screen scopes) and
+   (b) the API-service surface (which provider APIs need to be enabled
+   at the project level, e.g. Calendar API service enablement in Google
+   Cloud Console, which is separate from scope grant). Missing the
+   second surface caused 20 min of debug today; the cron returned a
+   misleading `usersProcessed: 0` because the underlying API was
+   disabled. For any new third-party integration spec (Google Sheets,
+   Drive, Microsoft Graph, Linear, etc.), the spec must list BOTH
+   surfaces explicitly and require Ajit-side verification of both
+   before the first OAuth click.
+
 ### Read paths for both tabs on first touch
 
 Both tabs should also auto-read the strategy doc registry (per the

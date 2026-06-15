@@ -1090,6 +1090,311 @@ export function useEmails(filter: FilterValue, pageSize: number) {
   });
 }
 
+// --- contacts (Personal CRM) -----------------------------------------------
+
+// Pinned shape from GET /api/contacts?filter=...&limit=N → { ok, contacts: [...] }
+// observed against src/app/api/contacts/route.ts (Agent B). The contacts table
+// is RLS-scoped to the current user; the route does the SELECT and projects the
+// columns listed below. All ts fields are ISO strings from Postgres; epoch
+// counters are integers. aliases / manual_tags are jsonb arrays (string[]) or
+// null when empty. cadence_break_days is computed by the route from last_seen_at.
+// Per CONVENTIONS.md rule 2 — when route shape changes, update this type AND
+// the comment.
+export type ContactRow = {
+  id: string;
+  primary_email: string | null;
+  primary_slack_user_id: string | null;
+  display_name: string;
+  aliases: string[] | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  last_seen_source: "email" | "slack" | "calendar" | "notion";
+  total_interactions_lifetime: number;
+  total_interactions_30d: number;
+  cadence_break_days: number | null;
+  manual_notes: string | null;
+  manual_tags: string[] | null;
+  archived: boolean;
+};
+
+// Pinned shape from GET /api/contacts/[id] → { ok, contact, recent_interactions }.
+// recent_interactions is a union by `kind` — email/slack/calendar — interleaved
+// and sorted by recency by the route. Forward-compatible: a fourth source
+// (notion) can be added to the union without breaking consumers that switch on
+// `kind` because TS will flag the missing case.
+export type RecentInteraction =
+  | {
+      kind: "email";
+      id: string;
+      subject: string;
+      snippet: string | null;
+      received_at: number;
+      classification: string | null;
+      link: string;
+    }
+  | {
+      kind: "slack";
+      id: string;
+      text: string;
+      received_at: number;
+      classification: string | null;
+    }
+  | {
+      kind: "calendar";
+      id: string;
+      title: string;
+      start_at: string;
+      end_at: string;
+      prep_priority: string | null;
+    };
+
+export type ContactDetailResponse = {
+  ok: true;
+  contact: ContactRow;
+  recent_interactions: RecentInteraction[];
+};
+
+export type ContactFilter = "cadence-break" | "recent" | "all" | "archived";
+
+// Accepts `filter | null`. Pass `null` to disable the query — mirrors
+// useNotionPages C1#3 pattern. Used by CadenceFlagsView (always "cadence-break")
+// AND ContactsView (filter chips). When filter is null the SWR key is null and
+// no network request fires.
+export function useContacts(filter: ContactFilter | null) {
+  const { data: me } = useMe();
+  // SWR key includes supabaseUserId so a Clerk session swap in the same tab
+  // (user A signs out, user B signs in) doesn't return user A's cached
+  // contacts to user B. Mirrors useNotionPages / useCalendarCredentials.
+  return useSWR<ContactRow[]>(
+    me && filter ? ["contacts", filter, me.supabaseUserId] : null,
+    async () => {
+      const res = await fetch(`/api/contacts?filter=${filter}&limit=50`);
+      if (!res.ok) throw new Error(`contacts_${res.status}`);
+      const data = await res.json();
+      return (data.contacts ?? []) as ContactRow[];
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+export function useContact(id: string | null) {
+  const { data: me } = useMe();
+  return useSWR<ContactDetailResponse>(
+    me && id ? ["contact", id, me.supabaseUserId] : null,
+    async () => {
+      const res = await fetch(`/api/contacts/${id}`);
+      if (!res.ok) throw new Error(`contact_${res.status}`);
+      return (await res.json()) as ContactDetailResponse;
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+// PATCH /api/contacts/[id] with the manual editable fields. On success
+// invalidates the matching useContact(id) key AND all useContacts list keys so
+// both the detail view and the dashboard cadence-flag list reflect the new
+// values (e.g., toggling archived=true should drop the row from the list).
+export function useUpdateContact() {
+  const { mutate } = useSWRConfig();
+  return async (
+    id: string,
+    body: {
+      manual_notes?: string | null;
+      manual_tags?: string[] | null;
+      archived?: boolean;
+    },
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`/api/contacts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return { ok: false, error: `update_${res.status}` };
+      // Match by prefix because the SWR key now includes supabaseUserId
+      // (we don't have me here; matcher pattern is more robust).
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "contact" && key[1] === id,
+      );
+      await mutate((key) => Array.isArray(key) && key[0] === "contacts");
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+// --- decisions (Mochary 1-pager) -------------------------------------------
+
+// Pinned shape from GET /api/decisions and POST /api/decisions (Agent B).
+// `status` cycles drafted → committed → postmortem_due → reviewed per the
+// decisions table state machine. linked_source_kind/id are nullable when the
+// decision wasn't triggered by an inbox surface (manual entry from /decisions).
+// All ts fields are ISO strings. options_considered / tags are jsonb arrays.
+export type DecisionStatus =
+  | "drafted"
+  | "committed"
+  | "postmortem_due"
+  | "reviewed";
+
+export type DecisionRow = {
+  id: string;
+  title: string;
+  decision_made_at: string;
+  context: string | null;
+  options_considered: string[] | null;
+  decision: string | null;
+  reasoning: string | null;
+  premortem: string | null;
+  postmortem: string | null;
+  postmortem_due_at: string | null;
+  postmortem_reminded_at: string | null;
+  status: DecisionStatus;
+  linked_source_kind: "email" | "slack" | "notion" | "calendar" | null;
+  linked_source_id: string | null;
+  tags: string[] | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DecisionListFilter = DecisionStatus | "all";
+
+// Accepts `filter | null` — same null-gate pattern as useContacts. Used by
+// DecisionsPostmortemDueView ("postmortem_due") AND DecisionsView (chips).
+export function useDecisions(filter: DecisionListFilter | null) {
+  const { data: me } = useMe();
+  return useSWR<DecisionRow[]>(
+    me && filter ? ["decisions", filter, me.supabaseUserId] : null,
+    async () => {
+      const qs =
+        filter === "all" ? "limit=50" : `status=${filter}&limit=50`;
+      const res = await fetch(`/api/decisions?${qs}`);
+      if (!res.ok) throw new Error(`decisions_${res.status}`);
+      const data = await res.json();
+      return (data.decisions ?? []) as DecisionRow[];
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+export function useDecision(id: string | null) {
+  const { data: me } = useMe();
+  return useSWR<DecisionRow>(
+    me && id ? ["decision", id, me.supabaseUserId] : null,
+    async () => {
+      const res = await fetch(`/api/decisions/${id}`);
+      if (!res.ok) throw new Error(`decision_${res.status}`);
+      const data = await res.json();
+      return data.decision as DecisionRow;
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+// POST /api/decisions with Mochary fields. On success returns the new id so
+// the form can router.push(`/decisions/${id}`). Also invalidates list keys so
+// the list view reflects the new row on the next visit.
+export type CreateDecisionBody = {
+  title: string;
+  context?: string | null;
+  options_considered?: string[] | null;
+  decision?: string | null;
+  reasoning?: string | null;
+  premortem?: string | null;
+  tags?: string[] | null;
+};
+
+export function useCreateDecision() {
+  const { mutate } = useSWRConfig();
+  return async (
+    body: CreateDecisionBody,
+  ): Promise<{ ok: boolean; id?: string; error?: string }> => {
+    try {
+      const res = await fetch("/api/decisions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error ?? `create_${res.status}` };
+      }
+      await mutate((key) => Array.isArray(key) && key[0] === "decisions");
+      return { ok: true, id: data.decision?.id };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+export type UpdateDecisionBody = Partial<{
+  title: string;
+  context: string | null;
+  options_considered: string[] | null;
+  decision: string | null;
+  reasoning: string | null;
+  premortem: string | null;
+  postmortem: string | null;
+  status: DecisionStatus;
+  tags: string[] | null;
+}>;
+
+export function useUpdateDecision() {
+  const { mutate } = useSWRConfig();
+  return async (
+    id: string,
+    body: UpdateDecisionBody,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`/api/decisions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return { ok: false, error: `update_${res.status}` };
+      // Matcher pattern — SWR key now includes supabaseUserId.
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "decision" && key[1] === id,
+      );
+      await mutate((key) => Array.isArray(key) && key[0] === "decisions");
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+export function useDeleteDecision() {
+  const { mutate } = useSWRConfig();
+  return async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`/api/decisions/${id}`, { method: "DELETE" });
+      if (!res.ok) return { ok: false, error: `delete_${res.status}` };
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "decision" && key[1] === id,
+        undefined,
+        { revalidate: false },
+      );
+      await mutate((key) => Array.isArray(key) && key[0] === "decisions");
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
 // --- ingest trigger ---------------------------------------------------------
 
 export function useTriggerIngest() {
