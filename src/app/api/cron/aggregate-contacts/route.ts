@@ -98,25 +98,78 @@ function parseFromAddress(
   s: string | null,
 ): { email: string | null; displayName: string | null } {
   if (!s) return { email: null, displayName: null };
-  // "Name <email@x.com>" pattern
-  const m = s.match(/^(.+?)\s*<([^>]+)>$/);
+  const trimmed = s.trim();
+  // "Name <email@x.com>" — name + angle-bracketed email. Name is OPTIONAL
+  // (0+ chars) so this also matches "<email@x.com>" form. The previous
+  // regex required at least 1 char before <, causing the bare-bracket
+  // form to fall through and store "<email>" as the email — Bug A from
+  // Tab 2's 10:57 UTC verification.
+  const m = trimmed.match(/^(.*?)\s*<([^>]+)>$/);
   if (m) {
-    return {
-      email: m[2].trim().toLowerCase(),
-      displayName: m[1].trim().replace(/^["']|["']$/g, ""),
-    };
+    const name = m[1].trim().replace(/^["']|["']$/g, "");
+    const email = m[2].trim().toLowerCase();
+    if (!email.includes("@")) return { email: null, displayName: null };
+    return { email, displayName: name.length > 0 ? name : null };
   }
-  // Bare email
-  const e = s.trim().toLowerCase();
+  // Bare email — no angle brackets. Reject if no @.
+  const e = trimmed.toLowerCase();
   return { email: e.includes("@") ? e : null, displayName: null };
 }
 
-// Normalize a bare email address (from emails.to_addresses[] or calendar
-// attendees) into lowercase. Returns null for malformed values.
+// Normalize an address from emails.to_addresses[] or calendar attendees
+// into a clean lowercase email. Gmail sometimes stores `Name <email>` in
+// the to_addresses array too — route through parseFromAddress so the
+// angle-bracket form gets parsed, not stored raw. Bug A part 2.
 function normalizeEmail(s: string | null | undefined): string | null {
   if (!s) return null;
+  // If the input has angle brackets, parse it; else strip + lowercase.
+  if (s.includes("<")) {
+    return parseFromAddress(s).email;
+  }
   const e = s.trim().toLowerCase();
   return e.includes("@") ? e : null;
+}
+
+// Bug B from Tab 2's 10:57 UTC verification: bot senders (LinkedIn job
+// alerts, Google notifications, automated noreply addresses) dominate the
+// dashboard "cadence flags" surface with useless signal. Skip them at
+// the source — don't even create a contact row for these. Heuristic:
+// match the local part (before @) against common bot prefixes and domains
+// against common bot/transactional senders. Conservative — false negatives
+// (real human emails passing through) are fine; false positives (skipping
+// a real human) are not.
+const BOT_LOCAL_PATTERNS: RegExp[] = [
+  /noreply/i,
+  /no-reply/i,
+  /^notify[-.]/i,
+  /[-.]alerts?@/i,
+  /^alerts?@/i,
+  /notifications?@/i,
+  /^automated@/i,
+  /^bounces@/i,
+  /^mailer-daemon@/i,
+  /^postmaster@/i,
+  /^do-not-reply/i,
+  /^donotreply/i,
+];
+const BOT_DOMAIN_SUFFIXES: string[] = [
+  ".bounces.google.com",
+  "@bounces.google.com",
+  "@email.linkedin.com",
+  "@info.linkedin.com",
+  "@notifications.google.com",
+];
+
+function isBotSender(email: string | null): boolean {
+  if (!email) return false;
+  const lower = email.toLowerCase();
+  for (const p of BOT_LOCAL_PATTERNS) {
+    if (p.test(lower)) return true;
+  }
+  for (const suf of BOT_DOMAIN_SUFFIXES) {
+    if (lower.endsWith(suf)) return true;
+  }
+  return false;
 }
 
 // Pull a display-name candidate string out of a value that might be null
@@ -256,7 +309,11 @@ export async function POST(req: NextRequest) {
         const { email: fromEmail, displayName: fromName } = parseFromAddress(
           e.from_address,
         );
-        if (fromEmail && fromEmail !== userEmailLower) {
+        if (
+          fromEmail &&
+          fromEmail !== userEmailLower &&
+          !isBotSender(fromEmail)
+        ) {
           const a = getOrCreateAggregate(agg, fromEmail, { email: fromEmail });
           recordInteraction(a, tsMs, "email", cleanName(fromName), 3, nowMs);
         }
@@ -267,6 +324,7 @@ export async function POST(req: NextRequest) {
           if (!toEmail) continue;
           if (toEmail === userEmailLower) continue; // skip self
           if (fromEmail && toEmail === fromEmail) continue; // already counted as inbound
+          if (isBotSender(toEmail)) continue; // skip outbound to bot addresses too
           const a = getOrCreateAggregate(agg, toEmail, { email: toEmail });
           recordInteraction(a, tsMs, "email", null, 0, nowMs);
         }
