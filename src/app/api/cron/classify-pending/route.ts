@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { makeSupabaseServerClient } from "@/lib/supabase/server";
-import { classifyContent } from "@/lib/prompts/classify";
+import { classifyContent, classifyCalendarPrep } from "@/lib/prompts/classify";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 // POST /api/cron/classify-pending
@@ -33,6 +33,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 //   classifyContent({ source: 'notion', ... }) injects a Notion-specific
 //   preface. If the RPC doesn't exist yet (migration 0017 not applied) the
 //   batch returns EMPTY_METRICS so email + Slack still ship their numbers.
+//
+// Calendar queue (Commit 7):
+//   Same claim/lookup/classify/write shape against calendar_events via
+//   claim_pending_classify_calendar_chunk. DIFFERENT schema: calls
+//   classifyCalendarPrep (separate function — not the 4-bucket
+//   classifyContent), writes prep_priority + prep_notes instead of
+//   classification + classification_reason. Uses its own CalendarBatchMetrics
+//   type since the sample shape differs. If migration 0020 isn't applied
+//   yet the batch returns EMPTY_CALENDAR_METRICS so email/Slack/Notion
+//   still ship.
 //
 // Cadence (pg_cron) is once per minute. With CLASSIFY_CHUNK_SIZE=5 per source,
 // each queue drains at 300 rows/source/hour. Slack and Notion both produce
@@ -71,6 +81,30 @@ type ClaimedNotionRow = {
   last_edited_at: string;
 };
 
+// Calendar claim row — shape comes from Agent A's
+// claim_pending_classify_calendar_chunk RPC. external_attendee_count is
+// computed server-side (pgSQL counts attendees whose email domain doesn't
+// match the user's primary domain).
+type ClaimedCalendarRow = {
+  id: string;
+  user_id: string;
+  calendar_id: string;
+  title: string;
+  description: string | null;
+  start_at: string; // ISO timestamptz
+  end_at: string; // ISO timestamptz
+  attendee_count: number;
+  external_attendee_count: number;
+  organizer_self: boolean;
+  user_response_status:
+    | "accepted"
+    | "tentative"
+    | "declined"
+    | "needsAction"
+    | null;
+  event_status: "confirmed" | "tentative" | "cancelled";
+};
+
 type BatchMetrics = {
   claimed: number;
   classified: number;
@@ -94,6 +128,31 @@ const EMPTY_METRICS: BatchMetrics = {
   samples: [],
 };
 
+// Calendar samples carry prep_priority instead of the 4-bucket classification —
+// separate type rather than widening BatchMetrics into a union with all-optional
+// sample fields (messy + no compile-time guarantee on which fields are present).
+type CalendarBatchMetrics = {
+  claimed: number;
+  classified: number;
+  failed: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  samples: Array<{
+    id: string;
+    prep_priority: "high" | "medium" | "low" | "none";
+    prep_notes: string;
+  }>;
+};
+
+const EMPTY_CALENDAR_METRICS: CalendarBatchMetrics = {
+  claimed: 0,
+  classified: 0,
+  failed: 0,
+  totalInputTokens: 0,
+  totalOutputTokens: 0,
+  samples: [],
+};
+
 export async function POST(req: NextRequest) {
   // --- Auth ----------------------------------------------------------------
   const expected = process.env.CRON_SECRET;
@@ -108,12 +167,14 @@ export async function POST(req: NextRequest) {
   const email = await processEmailBatch(supabase);
   const slack = await processSlackBatch(supabase);
   const notion = await processNotionBatch(supabase);
+  const calendar = await processCalendarBatch(supabase);
 
   const elapsedMs = Date.now() - startedAt;
   console.log("[classify-pending:done]", {
     email: { claimed: email.claimed, classified: email.classified, failed: email.failed },
     slack: { claimed: slack.claimed, classified: slack.classified, failed: slack.failed },
     notion: { claimed: notion.claimed, classified: notion.classified, failed: notion.failed },
+    calendar: { claimed: calendar.claimed, classified: calendar.classified, failed: calendar.failed },
     elapsedMs,
   });
 
@@ -122,6 +183,7 @@ export async function POST(req: NextRequest) {
     email,
     slack,
     notion,
+    calendar,
     elapsedMs,
   });
 }
@@ -513,6 +575,154 @@ async function processNotionBatch(supabase: SupabaseClient): Promise<BatchMetric
             id: claimedRow.id,
             message: updErr.message,
           });
+        }
+      }
+    }),
+  );
+
+  return metrics;
+}
+
+// ----------------------------------------------------------------------------
+// Calendar batch
+// ----------------------------------------------------------------------------
+
+async function processCalendarBatch(
+  supabase: SupabaseClient,
+): Promise<CalendarBatchMetrics> {
+  // --- Claim ---------------------------------------------------------------
+  // If migration 0020 hasn't been applied yet, the RPC won't exist — log + bail
+  // gracefully so the email/Slack/Notion batches above still ship their metrics.
+  const { data, error } = await supabase.rpc(
+    "claim_pending_classify_calendar_chunk",
+    { p_limit: CLASSIFY_CHUNK_SIZE },
+  );
+  if (error) {
+    console.error("[classify-pending:calendar:claim] rpc failed", {
+      message: error.message,
+    });
+    return EMPTY_CALENDAR_METRICS;
+  }
+  const claimed = (data ?? []) as ClaimedCalendarRow[];
+
+  if (claimed.length === 0) {
+    console.log("[classify-pending:calendar:claim] queue empty");
+    return EMPTY_CALENDAR_METRICS;
+  }
+
+  // --- Lookup user emails -------------------------------------------------
+  // Symmetry with the other batches even though classifyCalendarPrep itself
+  // doesn't take userEmail — we still want to fail-fast on a stale claim
+  // whose user_id no longer exists in users (data-integrity check).
+  const userIds = Array.from(new Set(claimed.map((r) => r.user_id)));
+  const { data: userRows, error: usersErr } = await supabase
+    .from("users")
+    .select("id, email")
+    .in("id", userIds);
+  if (usersErr || !userRows) {
+    console.error("[classify-pending:calendar:users] lookup failed", {
+      message: usersErr?.message ?? "no_rows",
+    });
+    return {
+      ...EMPTY_CALENDAR_METRICS,
+      claimed: claimed.length,
+      failed: claimed.length,
+    };
+  }
+  const userKnown = new Set(userRows.map((u) => u.id));
+
+  // --- Classify in parallel ----------------------------------------------
+  const results = await Promise.allSettled(
+    claimed.map(async (row) => {
+      if (!userKnown.has(row.user_id)) {
+        throw new Error(`unknown_user_id:${row.user_id}`);
+      }
+      const { result, usage } = await classifyCalendarPrep({
+        title: row.title,
+        description: row.description,
+        startAt: row.start_at,
+        endAt: row.end_at,
+        attendeeCount: row.attendee_count,
+        externalAttendeeCount: row.external_attendee_count,
+        organizerSelf: row.organizer_self,
+        userResponseStatus: row.user_response_status,
+        eventStatus: row.event_status,
+      });
+      return { row, result, usage };
+    }),
+  );
+
+  // --- Write-back + tally -------------------------------------------------
+  // calendar_events uses prep_priority + prep_notes (per Tab 2 spec). classified_at
+  // is timestamptz ISO like notion_pages / slack_messages.
+  const metrics: CalendarBatchMetrics = {
+    claimed: claimed.length,
+    classified: 0,
+    failed: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    samples: [],
+  };
+
+  await Promise.all(
+    results.map(async (settled, idx) => {
+      const claimedRow = claimed[idx];
+      if (settled.status === "fulfilled") {
+        const { result, usage } = settled.value;
+        metrics.totalInputTokens += usage.inputTokens ?? 0;
+        metrics.totalOutputTokens += usage.outputTokens ?? 0;
+        const { error: updErr } = await supabase
+          .from("calendar_events")
+          .update({
+            prep_priority: result.prep_priority,
+            prep_notes: result.prep_notes,
+            prep_error: null,
+            classified_at: new Date().toISOString(),
+            status: "processed",
+          })
+          .eq("id", claimedRow.id);
+        if (updErr) {
+          metrics.failed++;
+          console.error(
+            "[classify-pending:calendar:write] success-update failed",
+            {
+              id: claimedRow.id,
+              message: updErr.message,
+            },
+          );
+        } else {
+          metrics.classified++;
+          metrics.samples.push({
+            id: claimedRow.id,
+            prep_priority: result.prep_priority,
+            prep_notes: result.prep_notes,
+          });
+        }
+      } else {
+        metrics.failed++;
+        const detail =
+          settled.reason instanceof Error
+            ? settled.reason.message
+            : String(settled.reason);
+        console.error("[classify-pending:calendar:llm] classify failed", {
+          id: claimedRow.id,
+          message: detail,
+        });
+        const { error: updErr } = await supabase
+          .from("calendar_events")
+          .update({
+            prep_error: detail.slice(0, 500),
+            status: "failed",
+          })
+          .eq("id", claimedRow.id);
+        if (updErr) {
+          console.error(
+            "[classify-pending:calendar:write] failure-update failed",
+            {
+              id: claimedRow.id,
+              message: updErr.message,
+            },
+          );
         }
       }
     }),

@@ -23,6 +23,8 @@ import {
   useMe,
   useSlackWorkspace,
   useNotionIntegration,
+  useCalendarCredentials,
+  useDisconnectCalendar,
   useStorageTierPreview,
   useUpdateStorageTier,
   type StorageTierPreview,
@@ -114,6 +116,8 @@ export function SettingsView() {
     const slackErr = searchParams.get("slack_error");
     const notionOk = searchParams.get("notion_connected");
     const notionErr = searchParams.get("notion_error");
+    const calendarOk = searchParams.get("calendar_connected");
+    const calendarErr = searchParams.get("calendar_error");
     if (slackOk) {
       setSuccessMessage("Slack workspace connected.");
       // Invalidate the slack_workspace SWR key so the card flips to
@@ -139,6 +143,26 @@ export function SettingsView() {
       router.replace("/settings");
     } else if (notionErr) {
       setError(`Notion connection failed: ${notionErr}`);
+      router.replace("/settings");
+    } else if (calendarOk) {
+      setSuccessMessage("Google Calendar connected.");
+      // Invalidate the calendar-credentials key (now user-scoped to
+      // [calendar_credentials, supabaseUserId]) AND calendar_today so the
+      // dashboard's Today's Calendar section flips from "Connect" to live
+      // events without a manual refresh.
+      swrMutate(
+        (key) => Array.isArray(key) && key[0] === "calendar_credentials",
+        undefined,
+        { revalidate: true },
+      );
+      swrMutate(
+        (key) => Array.isArray(key) && key[0] === "calendar_today",
+        undefined,
+        { revalidate: true },
+      );
+      router.replace("/settings");
+    } else if (calendarErr) {
+      setError(`Calendar connection failed: ${calendarErr}`);
       router.replace("/settings");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -346,6 +370,7 @@ export function SettingsView() {
           <div className="mt-6 space-y-4">
             <SlackIntegrationCard />
             <NotionIntegrationCard />
+            <CalendarIntegrationCard />
           </div>
         </section>
       </div>
@@ -758,6 +783,188 @@ function NotionIntegrationCard() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Simple distinguishable calendar glyph — boxed grid with the top binding and
+// a check tick inside. Single solid color, deliberately NOT Google Calendar's
+// rainbow brand-mark so we stay clear of brand-asset compliance for v0 while
+// remaining recognizable next to the Slack/Notion glyphs above.
+function CalendarIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <line x1="3" y1="9" x2="21" y2="9" />
+      <line x1="8" y1="3" x2="8" y2="6" />
+      <line x1="16" y1="3" x2="16" y2="6" />
+      <polyline points="9 14 11 16 15 12" />
+    </svg>
+  );
+}
+
+// Outlook / Apple Calendar interop note. Per Tab 1 D4: rendered inline as a
+// collapsible <details> here in /settings rather than as a separate
+// /docs/calendar-interop route. Plain text only — no external link.
+function OutlookInteropNote() {
+  return (
+    <details className="mt-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+      <summary className="cursor-pointer font-medium text-gray-800">
+        Using Outlook or Apple Calendar?
+      </summary>
+      <div className="mt-2 space-y-2 text-gray-700">
+        <p>
+          You can subscribe your work calendar into Google Calendar, then
+          connect Google here.
+        </p>
+        <p>
+          <strong>Outlook:</strong> Go to outlook.com → Settings → Calendar →
+          Shared calendars → Publish a calendar → copy the ICS link. In Google
+          Calendar, add a new calendar via &ldquo;From URL&rdquo; and paste it.
+        </p>
+        <p>
+          <strong>Apple Calendar:</strong> File → New Calendar Subscription →
+          paste your CalDAV/ICS URL.
+        </p>
+        <p className="text-gray-500">
+          Sync takes a few minutes the first time.
+        </p>
+      </div>
+    </details>
+  );
+}
+
+function CalendarIntegrationCard() {
+  const { data: credentials, isLoading } = useCalendarCredentials();
+  const disconnect = useDisconnectCalendar();
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  if (isLoading) {
+    return <p className="text-sm text-gray-500">Loading…</p>;
+  }
+
+  const handleDisconnect = async () => {
+    setBusy(true);
+    setLocalError(null);
+    const res = await disconnect();
+    setBusy(false);
+    if (!res.ok) setLocalError(res.error ?? "disconnect_failed");
+  };
+
+  // Not connected (no row at all).
+  if (!credentials) {
+    return (
+      <div className="rounded-lg border border-gray-200 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <CalendarIcon className="mt-0.5 h-6 w-6 text-gray-700" />
+            <div>
+              <div className="text-sm font-semibold text-gray-900">
+                Google Calendar
+              </div>
+              <p className="mt-1 text-sm text-gray-600">
+                Connect Google Calendar to see today&apos;s meetings and get
+                prep priorities surfaced.
+              </p>
+            </div>
+          </div>
+          <a
+            href="/api/google/calendar/oauth/start"
+            className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+          >
+            Connect Calendar
+          </a>
+        </div>
+        <OutlookInteropNote />
+      </div>
+    );
+  }
+
+  // Disconnected (row exists, status=disconnected).
+  if (credentials.status === "disconnected") {
+    return (
+      <div className="rounded-lg border border-gray-200 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <CalendarIcon className="mt-0.5 h-6 w-6 text-gray-700" />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-gray-900">
+                  Google Calendar
+                </span>
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">
+                  Disconnected
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-gray-600">
+                Calendar token expired or revoked.
+              </p>
+              {credentials.disconnected_at && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Disconnected {formatRelative(credentials.disconnected_at)}
+                </p>
+              )}
+            </div>
+          </div>
+          <a
+            href="/api/google/calendar/oauth/start"
+            className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+          >
+            Reconnect Calendar
+          </a>
+        </div>
+        <OutlookInteropNote />
+      </div>
+    );
+  }
+
+  // Connected + active.
+  return (
+    <div className="rounded-lg border border-gray-200 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <CalendarIcon className="mt-0.5 h-6 w-6 text-gray-700" />
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-900">
+                Google Calendar
+              </span>
+              <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800">
+                Connected
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-gray-600">
+              Connected {formatRelative(credentials.connected_at)}
+            </p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              Last sync: {formatRelative(credentials.updated_at)}
+            </p>
+            {localError && (
+              <p className="mt-1 text-xs text-red-600">{localError}</p>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleDisconnect}
+          disabled={busy}
+          className="shrink-0 text-xs text-gray-600 underline hover:text-gray-900 disabled:opacity-50"
+        >
+          {busy ? "Disconnecting…" : "Disconnect"}
+        </button>
+      </div>
+      <OutlookInteropNote />
     </div>
   );
 }

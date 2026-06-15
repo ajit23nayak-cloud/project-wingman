@@ -409,6 +409,164 @@ export function useNotionPages(filter: FilterValue | null) {
   );
 }
 
+// --- calendar credentials (status only) -------------------------------------
+
+// Pinned shape from GET /api/dashboard/calendar-status — server route projects
+// from calendar_credentials WITHOUT access_token / refresh_token, so tokens
+// never reach the browser. The table has RLS-with-zero-policies (browser is
+// denied at the table level); this route is the only browser-visible status
+// path. Returns null when the user has never connected.
+export type CalendarCredentialsRow = {
+  status: "active" | "disconnected";
+  scope: string;
+  token_expires_at: string;
+  connected_at: string;
+  disconnected_at: string | null;
+  updated_at: string;
+};
+
+export function useCalendarCredentials() {
+  const { data: me } = useMe();
+  // User-scope the SWR key so a Clerk session swap (user A signs out,
+  // user B signs in same tab) doesn't return user A's cached credential
+  // status to user B until next revalidation. Mirrors useCounts /
+  // useSlackWorkspace / useNotionIntegration pattern.
+  return useSWR<CalendarCredentialsRow | null>(
+    me ? ["calendar_credentials", me.supabaseUserId] : null,
+    async () => {
+      const res = await fetch("/api/dashboard/calendar-status");
+      if (!res.ok) throw new Error(`calendar_status_${res.status}`);
+      return res.json();
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+// --- calendar events (today + tomorrow) -------------------------------------
+
+// Pinned shape from supabase.from('calendar_events').select(...) — RLS-scoped
+// to the current user via the calendar_events own-rows policy (migration 0019).
+// Cancelled events filtered at query time (event_status='confirmed'). attendees
+// is the raw Google jsonb shape — each entry has email + responseStatus +
+// optional displayName/self/organizer. attendee_count and external_attendee_count
+// are server-precomputed counts (no need to .length the array in the UI).
+export type CalendarEventRow = {
+  id: string;
+  google_event_id: string;
+  title: string;
+  start_at: string;
+  end_at: string;
+  all_day: boolean;
+  location: string | null;
+  conference_link: string | null;
+  conference_type: string | null;
+  organizer_email: string | null;
+  organizer_self: boolean;
+  attendees: Array<{
+    email?: string;
+    self?: boolean;
+    organizer?: boolean;
+    responseStatus?: string;
+    displayName?: string;
+  }> | null;
+  attendee_count: number | null;
+  external_attendee_count: number | null;
+  user_response_status:
+    | "accepted"
+    | "tentative"
+    | "declined"
+    | "needsAction"
+    | null;
+  event_status: "confirmed" | "tentative" | "cancelled";
+  prep_priority: "high" | "medium" | "low" | "none" | null;
+  prep_notes: string | null;
+};
+
+// Accepts `boolean | null` enabled flag. Pass `null` (or `false`) when no
+// calendar credentials exist so the SWR key is null and the query never fires
+// — mirrors the useNotionPages C1#3 pattern of gating expensive RLS-scoped
+// queries on integration-presence to avoid the reactive-query-amplification
+// anti-pattern documented in MEMORY.md.
+export function useCalendarToday(enabled: boolean | null) {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<{ today: CalendarEventRow[]; tomorrow: CalendarEventRow[] }>(
+    me && enabled ? ["calendar_today", me.supabaseUserId] : null,
+    async () => {
+      const now = new Date();
+      const startOfToday = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+      );
+      const startOfTomorrow = new Date(
+        startOfToday.getTime() + 24 * 60 * 60 * 1000,
+      );
+      const startOfDayAfter = new Date(
+        startOfTomorrow.getTime() + 24 * 60 * 60 * 1000,
+      );
+
+      const { data, error } = await supabase
+        .from("calendar_events")
+        .select(
+          "id, google_event_id, title, start_at, end_at, all_day, location, conference_link, conference_type, organizer_email, organizer_self, attendees, attendee_count, external_attendee_count, user_response_status, event_status, prep_priority, prep_notes",
+        )
+        .eq("event_status", "confirmed")
+        .gte("start_at", startOfToday.toISOString())
+        .lt("start_at", startOfDayAfter.toISOString())
+        .order("start_at", { ascending: true });
+
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as CalendarEventRow[];
+      const today: CalendarEventRow[] = [];
+      const tomorrow: CalendarEventRow[] = [];
+      for (const ev of rows) {
+        const startMs = new Date(ev.start_at).getTime();
+        if (startMs < startOfTomorrow.getTime()) today.push(ev);
+        else tomorrow.push(ev);
+      }
+      return { today, tomorrow };
+    },
+    // Drop refreshInterval — 5-min polling on a tab open all day is 12
+    // wasted queries/hour even when the user isn't looking, which is
+    // exactly the reactive-query-amplification anti-pattern from
+    // MEMORY.md. Rely on SWR's default revalidateOnFocus (re-fetch when
+    // the tab regains focus) — that's the right cadence for a calendar
+    // (events change a few times per day, not continuously).
+    { revalidateOnMount: true },
+  );
+}
+
+// DELETE /api/dashboard/calendar-status then invalidates both the credential
+// status key AND the calendar_today event-list keys so the dashboard flips
+// to the disconnected state without a manual refresh.
+export function useDisconnectCalendar() {
+  const { mutate } = useSWRConfig();
+  return async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/dashboard/calendar-status", {
+        method: "DELETE",
+      });
+      if (!res.ok) return { ok: false, error: `disconnect_${res.status}` };
+      // Invalidate both calendar keys. useCalendarCredentials is now
+      // user-scoped ([calendar_credentials, supabaseUserId]) so we
+      // match by prefix; useCalendarToday is the same shape.
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "calendar_credentials",
+      );
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "calendar_today",
+      );
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
 // --- single email + draft ---------------------------------------------------
 
 // Pinned response shape from `supabase.from('emails').select('*, drafts(*)')

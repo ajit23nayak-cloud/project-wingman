@@ -211,3 +211,105 @@ Founder's email: ${input.userEmail}`;
     },
   };
 }
+
+// ----------------------------------------------------------------------------
+// Calendar prep classifier — SEPARATE from classifyContent (per Tab 1 D1).
+//
+// Calendar isn't a 4-bucket urgent/important/fyi/archive decision; it's a
+// "does this meeting need prep" decision with a different vocabulary:
+//   high | medium | low | none
+//
+// Forcing it onto the email schema would lose signal (no good 4-bucket
+// mapping) and bend the prompt out of shape. Separate schema + function
+// keeps the email/slack/notion classifier untouched and lets classify-pending
+// dispatch a calendar batch with its own metrics shape.
+// ----------------------------------------------------------------------------
+
+export const calendarPrepSchema = z.object({
+  prep_priority: z.enum(["high", "medium", "low", "none"]),
+  prep_notes: z
+    .string()
+    .describe("1 sentence (5-25 words) explaining why this priority"),
+});
+
+export type CalendarPrepResult = z.infer<typeof calendarPrepSchema>;
+
+export type ClassifyCalendarInput = {
+  title: string;
+  description: string | null;
+  startAt: string; // ISO
+  endAt: string; // ISO
+  attendeeCount: number;
+  externalAttendeeCount: number;
+  organizerSelf: boolean;
+  userResponseStatus:
+    | "accepted"
+    | "tentative"
+    | "declined"
+    | "needsAction"
+    | null;
+  eventStatus: "confirmed" | "tentative" | "cancelled";
+};
+
+const CALENDAR_SYSTEM_PROMPT = `You are helping a founder decide which upcoming meetings need preparation.
+
+Classify prep_priority as one of: high | medium | low | none.
+- high: meeting where you'd lose credibility or miss outcomes without prep (investor pitch, strategic review, kickoff, decision meeting, external partner with 5+ people, 1:1 with C-level external)
+- medium: meeting where some context-loading helps (recurring 1:1 with team member with new topic, weekly cadence with 4+ internal people, customer call where you should review their account)
+- low: routine recurring meeting where you know the pattern (weekly standup, regular 1:1 with no flagged topic, internal sync)
+- none: focus blocks, social blocks, blocked time, OOO holds
+
+prep_notes: 1 sentence explaining why this priority. If high, suggest what to prep in 5-10 words.`;
+
+// formatDuration: returns "1h 30m" / "45m" / "2h". Falls back to "?" if
+// either ISO parses to NaN — the model handles missing-duration gracefully
+// and we'd rather ship a degraded prompt than throw on a single bad event.
+function formatDuration(startIso: string, endIso: string): string {
+  const startMs = Date.parse(startIso);
+  const endMs = Date.parse(endIso);
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) {
+    return "?";
+  }
+  const totalMin = Math.round((endMs - startMs) / 60000);
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  if (hours === 0) return `${mins}m`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
+}
+
+export async function classifyCalendarPrep(
+  input: ClassifyCalendarInput,
+): Promise<{
+  result: CalendarPrepResult;
+  usage: {
+    inputTokens: number | undefined;
+    outputTokens: number | undefined;
+    totalTokens: number | undefined;
+  };
+}> {
+  const userPrompt = `Event: ${input.title}
+Description: ${(input.description ?? "").slice(0, 500)}
+When: ${input.startAt} to ${input.endAt}, duration ${formatDuration(input.startAt, input.endAt)}
+Attendees: ${input.attendeeCount} total, ${input.externalAttendeeCount} external
+Organized by: ${input.organizerSelf ? "self" : "another person"}
+Your status: ${input.userResponseStatus ?? "no response"}
+Event status: ${input.eventStatus}`;
+
+  const { object, usage } = await generateObject({
+    model: getGeminiModel(),
+    system: CALENDAR_SYSTEM_PROMPT,
+    prompt: userPrompt,
+    schema: calendarPrepSchema,
+    maxRetries: LLM_MAX_RETRIES,
+  });
+
+  return {
+    result: object,
+    usage: {
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      totalTokens: usage?.totalTokens,
+    },
+  };
+}

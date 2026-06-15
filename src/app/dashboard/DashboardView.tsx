@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUser, UserButton } from "@clerk/nextjs";
 import { HelpMeThinkModal } from "@/app/_components/HelpMeThinkModal";
+import { CalendarTodayView } from "./CalendarTodayView";
 import {
   useMe,
   useCounts,
@@ -435,6 +436,11 @@ export function DashboardView() {
           </UserButton>
         </div>
       </header>
+
+      {/* Today's Calendar sits at the TOP of the dashboard per Tab 2 06:05 UTC
+          spec — calendar is the highest time-sensitivity signal for a founder,
+          ahead of Gmail-reauth/Slack/Notion banners and ahead of the email list. */}
+      <CalendarTodayView />
 
       {me?.gmailReauthNeeded && (
         <div className="max-w-4xl mx-auto mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
