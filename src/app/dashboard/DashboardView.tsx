@@ -13,6 +13,7 @@ import { HelpMeThinkModal } from "@/app/_components/HelpMeThinkModal";
 import { CalendarTodayView } from "./CalendarTodayView";
 import { CadenceFlagsView } from "./CadenceFlagsView";
 import { DecisionsPostmortemDueView } from "./DecisionsPostmortemDueView";
+import { OKRTrackerView } from "./OKRTrackerView";
 import {
   useMe,
   useCounts,
@@ -445,6 +446,12 @@ export function DashboardView() {
           non-empty (silent loading + silent empty per Tab 1 D5). */}
       <CadenceFlagsView />
       <DecisionsPostmortemDueView />
+
+      {/* OKR Tracker (Phase 4) — strategic context above tactical surfaces.
+          Hidden when no Notion integration OR no OKR pages found. Sits
+          BETWEEN Decisions due (attention) and Calendar (tactical) per
+          Tab 2's 11:05 UTC dashboard layout lock. */}
+      <OKRTrackerView />
 
       {/* Today's Calendar — highest time-sensitivity signal for a founder,
           ahead of Gmail-reauth/Slack/Notion banners and ahead of the email list. */}

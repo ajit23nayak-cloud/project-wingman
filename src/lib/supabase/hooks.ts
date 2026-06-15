@@ -409,6 +409,67 @@ export function useNotionPages(filter: FilterValue | null) {
   );
 }
 
+// --- Notion OKR pages (Phase 4) --------------------------------------------
+
+// Pinned shape from supabase.from('notion_pages').select(...) where
+// is_okr_page=true. okr_structured is the jsonb shape produced by
+// src/lib/prompts/okrExtract.ts — { quarter?, objectives: [{ text,
+// key_results: [...] }] }. Can be null when detect=true but extract
+// failed/returned empty (logged warning, dashboard shows "detected
+// but not parsed" state).
+export type OKRKeyResult = {
+  text: string;
+  progress?: string | null;
+  confidence?: "green" | "yellow" | "red" | null;
+};
+
+export type OKRObjective = {
+  text: string;
+  key_results: OKRKeyResult[];
+};
+
+export type OKRStructured = {
+  quarter?: string | null;
+  objectives: OKRObjective[];
+};
+
+export type OKRPageRow = {
+  id: string;
+  page_id: string;
+  title: string;
+  url: string | null;
+  okr_structured: OKRStructured | null;
+  last_edited_at: string;
+  okr_extracted_at: string | null;
+};
+
+// Accepts `enabled: boolean | null` — pass null when no Notion integration
+// exists so the SWR key stays null and no query fires. Mirrors
+// useCalendarToday / useNotionPages gating per the C1#3 anti-amplification
+// pattern. The `enabled` flag is computed in DashboardView from
+// useNotionIntegration().
+export function useOKRs(enabled: boolean | null) {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<OKRPageRow[]>(
+    me && enabled ? ["okrs", me.supabaseUserId] : null,
+    async () => {
+      const { data, error } = await supabase
+        .from("notion_pages")
+        .select(
+          "id, page_id, title, url, okr_structured, last_edited_at, okr_extracted_at",
+        )
+        .eq("is_okr_page", true)
+        .eq("archived_stale", false)
+        .order("last_edited_at", { ascending: false })
+        .limit(20);
+      if (error) throw new Error(error.message);
+      return (data ?? []) as OKRPageRow[];
+    },
+    { revalidateOnMount: true },
+  );
+}
+
 // --- calendar credentials (status only) -------------------------------------
 
 // Pinned shape from GET /api/dashboard/calendar-status — server route projects

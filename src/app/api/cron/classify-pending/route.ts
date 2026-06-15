@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { makeSupabaseServerClient } from "@/lib/supabase/server";
 import { classifyContent, classifyCalendarPrep } from "@/lib/prompts/classify";
+import { detectOKRPage } from "@/lib/prompts/okrDetect";
+import {
+  extractOKRStructure,
+  type OKRStructured,
+} from "@/lib/prompts/okrExtract";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 // POST /api/cron/classify-pending
@@ -492,13 +497,25 @@ async function processNotionBatch(supabase: SupabaseClient): Promise<BatchMetric
   const emailByUserId = new Map<string, string>();
   for (const u of userRows) emailByUserId.set(u.id, u.email);
 
-  // --- Classify in parallel ----------------------------------------------
+  // --- Classify + OKR detect/extract in parallel -------------------------
+  // Per Phase 4 spec (Tab 2 11:05 UTC): after standard classification, run
+  // a 2nd LLM call to detect "is this an OKR page?" If true, run a 3rd
+  // call to extract Objective→Key Results structure. Both extra calls run
+  // ONLY at first classification (when is_okr_page IS NULL); the claim
+  // RPC only returns status='pending' rows so this naturally executes
+  // once per page lifetime.
+  //
+  // v0 trade-off: re-extract on page edit is deferred. Notion ingest's
+  // upsert refreshes title/snippet but doesn't flip status back to
+  // 'pending', so edits don't re-trigger this path. v1 would either
+  // flip status on edit OR add a separate periodic re-extract sweep.
   const results = await Promise.allSettled(
     claimed.map(async (row) => {
       const userEmail = emailByUserId.get(row.user_id);
       if (!userEmail) {
         throw new Error(`no_user_email_for_user_id:${row.user_id}`);
       }
+      // 1. Standard classification.
       const { result, usage } = await classifyContent({
         source: "notion",
         pageTitle: row.title,
@@ -506,7 +523,61 @@ async function processNotionBatch(supabase: SupabaseClient): Promise<BatchMetric
         lastEditedAt: row.last_edited_at,
         userEmail,
       });
-      return { row, result, usage };
+      // 2. OKR detection (cheap — single boolean). Defensive — failures
+      //    don't block the classification writeback.
+      let isOkr: boolean | null = null;
+      let okrStructured: OKRStructured | null = null;
+      let okrUsageIn = 0;
+      let okrUsageOut = 0;
+      try {
+        const detect = await detectOKRPage({
+          title: row.title,
+          snippet: row.snippet,
+        });
+        okrUsageIn += detect.usage.inputTokens ?? 0;
+        okrUsageOut += detect.usage.outputTokens ?? 0;
+        isOkr = detect.result.is_okr_page;
+        // 3. Extract structure IF the page is an OKR doc.
+        if (isOkr) {
+          try {
+            const extract = await extractOKRStructure({
+              title: row.title,
+              snippet: row.snippet,
+            });
+            okrUsageIn += extract.usage.inputTokens ?? 0;
+            okrUsageOut += extract.usage.outputTokens ?? 0;
+            // Only persist when at least one objective extracted —
+            // otherwise the row is misleading (is_okr_page=true,
+            // okr_structured={objectives: []}).
+            okrStructured =
+              extract.result.objectives.length > 0 ? extract.result : null;
+          } catch (err) {
+            // Extract failed (malformed JSON from Gemini or rate limit).
+            // Keep is_okr_page=true so we know it was detected; structure
+            // stays null and surfaces in the dashboard as "detected but
+            // not parsed." v1 re-extract sweep would retry these.
+            console.warn("[classify-pending:notion:okr:extract] failed", {
+              id: row.id,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      } catch (err) {
+        // Detect failed — log + leave is_okr_page as null so a future
+        // sweep can retry. Don't block classification writeback.
+        console.warn("[classify-pending:notion:okr:detect] failed", {
+          id: row.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return {
+        row,
+        result,
+        usage,
+        isOkr,
+        okrStructured,
+        okrUsage: { in: okrUsageIn, out: okrUsageOut },
+      };
     }),
   );
 
@@ -526,18 +597,33 @@ async function processNotionBatch(supabase: SupabaseClient): Promise<BatchMetric
     results.map(async (settled, idx) => {
       const claimedRow = claimed[idx];
       if (settled.status === "fulfilled") {
-        const { result, usage } = settled.value;
+        const { result, usage, isOkr, okrStructured, okrUsage } = settled.value;
         metrics.totalInputTokens += usage.inputTokens ?? 0;
         metrics.totalOutputTokens += usage.outputTokens ?? 0;
+        // OKR token usage rolls into the same per-batch totals — keeps
+        // the cost-tracking surface simple.
+        metrics.totalInputTokens += okrUsage.in;
+        metrics.totalOutputTokens += okrUsage.out;
+        // OKR fields written in the same UPDATE as classification so
+        // they atomically transition with status='processed'. is_okr_page
+        // is nullable when detect failed (caller logs the warning).
+        const updatePayload: Record<string, unknown> = {
+          classification: result.classification,
+          classification_reason: result.reason,
+          classification_error: null,
+          classified_at: new Date().toISOString(),
+          status: "processed",
+        };
+        if (isOkr !== null) {
+          updatePayload.is_okr_page = isOkr;
+          if (isOkr) {
+            updatePayload.okr_structured = okrStructured;
+            updatePayload.okr_extracted_at = new Date().toISOString();
+          }
+        }
         const { error: updErr } = await supabase
           .from("notion_pages")
-          .update({
-            classification: result.classification,
-            classification_reason: result.reason,
-            classification_error: null,
-            classified_at: new Date().toISOString(),
-            status: "processed",
-          })
+          .update(updatePayload)
           .eq("id", claimedRow.id);
         if (updErr) {
           metrics.failed++;
