@@ -1,13 +1,26 @@
 "use client";
 
-// Dashboard "Decisions due for postmortem" section. Mirrors CadenceFlagsView's
-// shape (silent when empty, no skeleton). Per Tab 2 09:35 UTC architectural
-// lock: sits ABOVE CalendarTodayView, BELOW CadenceFlagsView. The decisions
-// route filters status='postmortem_due' on the server, so by the time rows
-// arrive here, they're all overdue for review.
+// Dashboard "decisions" section. Mirrors CadenceFlagsView's shape (silent
+// when empty, no skeleton). Per Tab 2 09:35 UTC architectural lock: sits
+// ABOVE CalendarTodayView, BELOW CadenceFlagsView. The decisions route
+// filters status='postmortem_due' on the server, so by the time rows arrive
+// here, they're all overdue for review.
+//
+// Redesign (08:30 + 08:55 UTC 2026-06-18): uses the shared DashboardRow
+// pattern. Lock 3: decision rows open `/decisions/[id]` in the SAME tab
+// (Wingman-internal navigation), so external={false}. Time column uses
+// postmortem_due_at (the ±N days countdown) — confirmed against
+// DecisionRow.postmortem_due_at in src/lib/supabase/hooks.ts.
 
-import Link from "next/link";
 import { useDecisions } from "@/lib/supabase/hooks";
+import {
+  DashboardRow,
+  DashboardRowList,
+  DashboardSection,
+  DashboardSectionHeader,
+  dotForPostmortemDue,
+  formatPostmortemDays,
+} from "./_primitives";
 
 export function DecisionsPostmortemDueView() {
   const { data: decisions, isLoading } = useDecisions("postmortem_due");
@@ -15,31 +28,35 @@ export function DecisionsPostmortemDueView() {
   if (isLoading || !decisions || decisions.length === 0) return null;
 
   return (
-    <section className="max-w-4xl mx-auto mt-6">
-      <h2 className="text-base font-semibold text-gray-900 mb-2">
-        Decisions due for postmortem
-      </h2>
-      <div className="space-y-1">
-        {decisions.map((d) => (
-          <Link
-            key={d.id}
-            href={`/decisions/${d.id}`}
-            className="flex items-center justify-between rounded-md border border-purple-100 bg-purple-50 px-3 py-2 hover:border-purple-300"
-          >
-            <span className="text-sm text-purple-900">{d.title}</span>
-            <span className="text-xs text-purple-700">
-              decided {formatRelativeDate(d.decision_made_at)}
-            </span>
-          </Link>
-        ))}
-      </div>
-    </section>
+    <DashboardSection>
+      <DashboardSectionHeader
+        title="decisions"
+        count={`${decisions.length} due`}
+      />
+      <DashboardRowList>
+        {decisions.map((d) => {
+          const dot = dotForPostmortemDue(d.postmortem_due_at);
+          const dotLabel =
+            dot === "red"
+              ? "postmortem overdue"
+              : dot === "amber"
+                ? "postmortem due soon"
+                : "postmortem upcoming";
+          return (
+            <DashboardRow
+              key={d.id}
+              dot={dot}
+              dotLabel={dotLabel}
+              time={formatPostmortemDays(d.postmortem_due_at)}
+              title={d.title}
+              badge="postmortem"
+              hint="write"
+              href={`/decisions/${d.id}`}
+              external={false}
+            />
+          );
+        })}
+      </DashboardRowList>
+    </DashboardSection>
   );
-}
-
-function formatRelativeDate(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-  if (days < 1) return "today";
-  if (days === 1) return "yesterday";
-  return `${days} days ago`;
 }

@@ -4,6 +4,12 @@
 // Data flow: useMe loads first (gates the rest), useCounts + useEmails query
 // Postgres directly via the Clerk JWT, useTriggerIngest fires the server
 // ingest route then invalidates the keys above.
+//
+// Superhuman-inspired redesign (2026-06-18): all list surfaces (MH banner
+// stack, Slack DMs, Notion Pages, Email list) use the shared DashboardRow
+// pattern from ./_primitives. Section order per Lock 1: Cadence → Decisions
+// → OKR → Calendar → Slack → Notion → Email (last). Email rows open in new
+// tab per Lock 2.
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -14,6 +20,15 @@ import { CalendarTodayView } from "./CalendarTodayView";
 import { CadenceFlagsView } from "./CadenceFlagsView";
 import { DecisionsPostmortemDueView } from "./DecisionsPostmortemDueView";
 import { OKRTrackerView } from "./OKRTrackerView";
+import {
+  DashboardRow,
+  DashboardSection,
+  DashboardSectionHeader,
+  DashboardRowList,
+  formatRelativeAge,
+  dotForClassification,
+  buildSlackChannelLink,
+} from "./_primitives";
 import {
   useMe,
   useCounts,
@@ -31,8 +46,6 @@ import {
   type Counts,
   type FilterValue,
   type EmailRow,
-  type SlackMessageRow,
-  type NotionPageRow,
 } from "@/lib/supabase/hooks";
 
 const ONBOARDING_DISMISS_KEY = "wingman_onboarding_dismissed";
@@ -87,13 +100,6 @@ function countFor(counts: Counts | undefined, value: FilterValue): number | null
   return counts[value];
 }
 
-const BADGE_STYLES: Record<NonNullable<EmailRow["classification"]>, string> = {
-  urgent: "bg-red-100 text-red-800 border-red-200",
-  important: "bg-blue-100 text-blue-800 border-blue-200",
-  fyi: "bg-gray-100 text-gray-600 border-gray-200",
-  archive: "bg-gray-50 text-gray-400 border-gray-200",
-};
-
 function formatRelativeTime(timestamp: number | null | undefined): string {
   if (!timestamp) return "never";
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -104,144 +110,6 @@ function formatRelativeTime(timestamp: number | null | undefined): string {
   if (hours < 24) return `${hours} hr ago`;
   const days = Math.floor(hours / 24);
   return `${days} day${days === 1 ? "" : "s"} ago`;
-}
-
-function formatEmailTime(ms: number): string {
-  const date = new Date(ms);
-  const now = new Date();
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  if (sameDay) {
-    return date.toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-// Inline Slack mark — official colorway. Copied from SettingsView's SlackIcon
-// so we don't take a cross-component import dependency for one SVG.
-function SlackIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path d="M5 14.5a2.5 2.5 0 1 1 2.5-2.5v2.5H5z" fill="#36C5F0" />
-      <path
-        d="M6.25 14.5a2.5 2.5 0 0 1 5 0v6.25a2.5 2.5 0 0 1-5 0V14.5z"
-        fill="#2EB67D"
-      />
-      <path d="M9.5 5a2.5 2.5 0 1 1 2.5 2.5H9.5V5z" fill="#ECB22E" />
-      <path
-        d="M9.5 6.25a2.5 2.5 0 0 1 0 5H3.25a2.5 2.5 0 0 1 0-5H9.5z"
-        fill="#E01E5A"
-      />
-      <path d="M19 9.5a2.5 2.5 0 1 1-2.5 2.5V9.5H19z" fill="#36C5F0" />
-      <path
-        d="M17.75 9.5a2.5 2.5 0 0 1-5 0V3.25a2.5 2.5 0 0 1 5 0V9.5z"
-        fill="#2EB67D"
-      />
-      <path d="M14.5 19a2.5 2.5 0 1 1-2.5-2.5h2.5V19z" fill="#ECB22E" />
-      <path
-        d="M14.5 17.75a2.5 2.5 0 0 1 0-5h6.25a2.5 2.5 0 0 1 0 5H14.5z"
-        fill="#E01E5A"
-      />
-    </svg>
-  );
-}
-
-// Slack message row. Matches the email row's visual rhythm — same border,
-// same padding, same classification badge color scheme. Prefixed with the
-// Slack icon instead of the (implicit) email source.
-function SlackMessageRowView({ message }: { message: SlackMessageRow }) {
-  const sender = message.sender_name ?? message.sender_id;
-  const badgeClass = BADGE_STYLES[message.classification];
-  return (
-    <div className="flex items-center gap-3 rounded-md border border-gray-100 bg-white px-3 py-2 hover:border-gray-300">
-      <SlackIcon className="h-4 w-4 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-gray-900">
-            {sender}
-          </span>
-          <span
-            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase ${badgeClass}`}
-          >
-            {message.classification}
-          </span>
-        </div>
-        <p className="mt-0.5 truncate text-xs text-gray-600">{message.text}</p>
-      </div>
-      <span className="shrink-0 text-xs text-gray-500">
-        {formatEmailTime(message.received_at)}
-      </span>
-    </div>
-  );
-}
-
-// Simple page-icon glyph for Notion rows. Single solid color (not the brand
-// wordmark) — distinguishable from Slack's rainbow at a glance without
-// invoking brand-asset compliance for v0.
-function NotionPageIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={className}
-      fill="currentColor"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-    >
-      <path d="M5 3h10l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm9 1.5V8h3.5L14 4.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z" />
-    </svg>
-  );
-}
-
-// Notion page row. Mirrors the SlackMessageRowView aesthetic — same border,
-// padding, badge styling. When the page has a non-null url, the whole row is
-// a target=_blank anchor so a click opens the page in Notion. When url is
-// null (rare; row stored before url was populated), the row is non-clickable
-// so the user isn't sent to a broken link.
-function NotionPageRowView({ page }: { page: NotionPageRow }) {
-  const badgeClass = BADGE_STYLES[page.classification];
-  const content = (
-    <div className="flex items-center gap-3 rounded-md border border-gray-100 bg-white px-3 py-2 hover:border-gray-300">
-      <NotionPageIcon className="h-4 w-4 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-gray-900">
-            {page.title || "(untitled page)"}
-          </span>
-          <span
-            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase ${badgeClass}`}
-          >
-            {page.classification}
-          </span>
-        </div>
-        <p className="mt-0.5 truncate text-xs text-gray-600">{page.snippet}</p>
-      </div>
-      <span className="shrink-0 text-xs text-gray-500">
-        {formatEmailTime(page.received_at)}
-      </span>
-    </div>
-  );
-  return page.url ? (
-    <a
-      href={page.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block"
-    >
-      {content}
-    </a>
-  ) : (
-    content
-  );
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -391,6 +259,16 @@ export function DashboardView() {
     !emailsHook.data && !emailsHook.error && emailsHook.isLoading;
   const loadingMore = emailsHook.isValidating && !loadingFirstPage;
 
+  // MH banner-stack visibility flags — used to decide whether to render the
+  // "alerts" section at all. If all 4 banners are hidden, section is skipped.
+  const showEscalationBanner =
+    escalationCount7d !== undefined && escalationCount7d >= 3;
+  const showAnyMhBanner =
+    showAssessmentBanner ||
+    showOnboardingBanner ||
+    !!nudges.widget ||
+    showEscalationBanner;
+
   return (
     <main className="min-h-screen p-6">
       <header className="flex justify-between items-center max-w-4xl mx-auto">
@@ -440,23 +318,9 @@ export function DashboardView() {
         </div>
       </header>
 
-      {/* Section order from top per Tab 2 09:35 UTC architectural lock:
-          Cadence flags → Decisions due for postmortem → Today's Calendar →
-          banners → email/Slack/Notion. The two CRM sections render ONLY when
-          non-empty (silent loading + silent empty per Tab 1 D5). */}
-      <CadenceFlagsView />
-      <DecisionsPostmortemDueView />
-
-      {/* OKR Tracker (Phase 4) — strategic context above tactical surfaces.
-          Hidden when no Notion integration OR no OKR pages found. Sits
-          BETWEEN Decisions due (attention) and Calendar (tactical) per
-          Tab 2's 11:05 UTC dashboard layout lock. */}
-      <OKRTrackerView />
-
-      {/* Today's Calendar — highest time-sensitivity signal for a founder,
-          ahead of Gmail-reauth/Slack/Notion banners and ahead of the email list. */}
-      <CalendarTodayView />
-
+      {/* Gmail reauth — global error banner, stays at top of page (visual
+          presentation untouched per spec; row pattern doesn't apply to
+          descriptive-CTA banners). */}
       {me?.gmailReauthNeeded && (
         <div className="max-w-4xl mx-auto mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
           <h3 className="font-semibold text-amber-900">
@@ -487,9 +351,155 @@ export function DashboardView() {
         </div>
       )}
 
-      {/* Connect Slack banner — renders only when workspace data has loaded
-          AND no workspace exists. When workspace is present, the Slack DM
-          section below takes over. */}
+      {/* Welcome card — reduced visual weight vs the original h2/grid layout.
+          Stays at the top per the redesign brief: name greeting + ingest
+          progress + counts + Classify-all. NOT a DashboardSection — it's the
+          opening "hello" card, not a list surface. */}
+      <section className="max-w-4xl mx-auto mt-6">
+        <h2 className="text-lg font-semibold">Welcome, {firstName}.</h2>
+
+        {isIngesting && firstIngestCount === null && (
+          <div className="mt-3 flex items-center gap-3">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700" />
+            <div>
+              <p className="text-gray-700 text-sm">
+                Reading your last 30 days of email…
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Usually takes 30–90 seconds.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {firstIngestCount !== null && !isIngesting && (
+          <p className="mt-3 text-gray-700 text-sm">
+            Found {firstIngestCount} emails from the last 30 days.
+          </p>
+        )}
+
+        {ingestError && (
+          <p className="mt-3 text-sm text-red-600">{ingestError}</p>
+        )}
+
+        {(meError || countsError) && (
+          <p className="mt-3 text-sm text-red-600">Could not load. Refresh.</p>
+        )}
+
+        <div className="mt-4 grid grid-cols-2 gap-3 max-w-md">
+          <div className="rounded-lg border border-gray-200 p-3">
+            <div className="text-[11px] text-gray-500 uppercase tracking-wide">
+              Emails ingested
+            </div>
+            <div className="text-lg font-semibold mt-0.5">
+              {counts?.total ?? "—"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-3">
+            <div className="text-[11px] text-gray-500 uppercase tracking-wide">
+              Last sync
+            </div>
+            <div className="text-lg font-semibold mt-0.5">
+              {formatRelativeTime(me?.lastIngestedAt)}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <button
+            disabled
+            title="Available next session"
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+          >
+            Classify all
+          </button>
+        </div>
+      </section>
+
+      {/* MH banner stack — Lock 4: the 4 card banners (Assessment, Onboarding,
+          Nudge widget, Escalation) repaint to the row pattern. Section title
+          is "alerts" — picked over "today" because it covers the heterogenous
+          mix (action prompts + safety + nudges) better than a time-of-day
+          framing. Section hides entirely when no banner is visible. Crisis
+          resources list still renders below the escalation row to preserve
+          discoverability per Lock 4 safety caveat. */}
+      {showAnyMhBanner && (
+        <DashboardSection>
+          <DashboardSectionHeader title="alerts" count={null} />
+          <DashboardRowList>
+            {showAssessmentBanner && (
+              <DashboardRow
+                dot="amber"
+                dotLabel="assessment pending"
+                time="now"
+                title="Personalize Wingman in 90 seconds"
+                badge="mh"
+                hint="start"
+                href="/assessment"
+                external={false}
+              />
+            )}
+            {showOnboardingBanner && (
+              <DashboardRow
+                dot="amber"
+                dotLabel="onboarding nudge"
+                time="now"
+                title="Inbox classified. Try generating your first draft reply."
+                badge="nudge"
+                hint="dismiss"
+                onClick={handleDismissBanner}
+              />
+            )}
+            {nudges.widget && (
+              <DashboardRow
+                dot="grey"
+                dotLabel="nudge"
+                time="now"
+                title={nudges.widget.title}
+                badge="nudge"
+                hint=""
+              />
+            )}
+            {showEscalationBanner && (
+              <DashboardRow
+                dot="red"
+                dotLabel="heavy weeks signal"
+                time="now"
+                title="Wingman noticed you've been carrying heavy weeks"
+                badge="mh"
+                hint=""
+              />
+            )}
+          </DashboardRowList>
+          {showEscalationBanner && (
+            <p className="px-2 mt-1 text-[11px] text-gray-500">
+              India: iCall 9152987821 · Vandrevala 1860-2662-345 · US: 988 ·
+              UK: Samaritans 116 123 ·{" "}
+              <a
+                href="https://www.iasp.info/resources/Crisis_Centres"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                IASP directory
+              </a>
+            </p>
+          )}
+        </DashboardSection>
+      )}
+
+      {/* Section order from spec Lock 1 (08:55 UTC):
+          MH alerts → Cadence → Decisions → OKR → Calendar → Slack → Notion →
+          Email (LAST). Strategic surfaces above tactical so we don't
+          re-trigger inbox-zero anxiety. */}
+      <CadenceFlagsView />
+      <DecisionsPostmortemDueView />
+      <OKRTrackerView />
+      <CalendarTodayView />
+
+      {/* Connect Slack banner — sits right above the Slack DMs section so it
+          reads as per-section context, not a global CTA. Hidden once a
+          workspace is connected; the Slack DMs section below takes over. */}
       {!slackWorkspaceLoading && !slackWorkspace && (
         <div className="max-w-4xl mx-auto mt-6 rounded-lg border border-purple-200 bg-purple-50 p-4">
           <div className="flex items-start justify-between gap-4">
@@ -512,13 +522,41 @@ export function DashboardView() {
         </div>
       )}
 
-      {/* Connect Notion banner — LOWER priority than the Slack banner. Only
-          shown when Notion is NOT connected AND Slack IS connected, so we
-          never stack two "connect something" banners at once. When both
-          integrations are missing, the Slack banner above takes precedence;
-          the Notion banner appears on the next dashboard visit after Slack
-          is connected. */}
-      {!notionIntegrationLoading && !notionIntegration && slackWorkspace && (
+      {/* Slack DMs section — row pattern via DashboardRow. Hidden when no
+          workspace connected (banner above covers CTA) or when no messages. */}
+      {slackWorkspace && slackMessages && slackMessages.length > 0 && (
+        <DashboardSection>
+          <DashboardSectionHeader
+            title="slack"
+            count={`${slackMessages.length} dm${slackMessages.length === 1 ? "" : "s"}`}
+          />
+          <DashboardRowList>
+            {slackMessages.map((m) => (
+              <DashboardRow
+                key={m.id}
+                dot={dotForClassification(m.classification)}
+                dotLabel={`urgency: ${m.classification}`}
+                time={formatRelativeAge(m.received_at)}
+                title={`${m.sender_name ?? m.sender_id}: ${m.text.slice(0, 60)}`}
+                badge="slack"
+                hint="view"
+                href={buildSlackChannelLink(
+                  slackWorkspace.team_id,
+                  m.channel_id,
+                )}
+                external={true}
+              />
+            ))}
+          </DashboardRowList>
+        </DashboardSection>
+      )}
+
+      {/* Connect Notion banner — sits right above the Notion Pages section.
+          Same per-section context pattern as Connect Slack. Originally
+          gated behind slackWorkspace presence to avoid double-banner stack;
+          now it's per-section so the gate is dropped — banner shows whenever
+          Notion isn't connected. */}
+      {!notionIntegrationLoading && !notionIntegration && (
         <div className="max-w-4xl mx-auto mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -540,156 +578,45 @@ export function DashboardView() {
         </div>
       )}
 
-      <section className="max-w-4xl mx-auto mt-10">
-        <h2 className="text-2xl font-semibold">Welcome, {firstName}.</h2>
+      {/* Notion Pages section — row pattern via DashboardRow. Each row links
+          out to the original page in Notion (external new tab per Lock 3). */}
+      {notionIntegration && notionPages && notionPages.length > 0 && (
+        <DashboardSection>
+          <DashboardSectionHeader
+            title="notion"
+            count={`${notionPages.length} page${notionPages.length === 1 ? "" : "s"}`}
+          />
+          <DashboardRowList>
+            {notionPages
+              .filter((p) => p.url)
+              .map((p) => (
+                <DashboardRow
+                  key={p.id}
+                  dot={dotForClassification(p.classification)}
+                  dotLabel={`urgency: ${p.classification}`}
+                  time={formatRelativeAge(p.received_at)}
+                  title={p.title || "(untitled page)"}
+                  badge="notion"
+                  hint="open"
+                  href={p.url ?? undefined}
+                  external={true}
+                />
+              ))}
+          </DashboardRowList>
+        </DashboardSection>
+      )}
 
-        {isIngesting && firstIngestCount === null && (
-          <div className="mt-3 flex items-center gap-3">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700" />
-            <div>
-              <p className="text-gray-700 text-sm">
-                Reading your last 30 days of email…
-              </p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Usually takes 30–90 seconds.
-              </p>
-            </div>
-          </div>
-        )}
+      {/* Email section — LAST per Lock 1. Filter tabs + pending notice +
+          observations stay attached. Rows use DashboardRow; email opens
+          in new tab per Lock 2 to preserve dashboard context + draft-reply
+          flow. */}
+      <DashboardSection>
+        <DashboardSectionHeader
+          title="email"
+          count={`${counts?.total ?? 0}`}
+        />
 
-        {firstIngestCount !== null && !isIngesting && (
-          <p className="mt-3 text-gray-700">
-            Found {firstIngestCount} emails from the last 30 days.
-          </p>
-        )}
-
-        {showAssessmentBanner && (
-          <div className="mt-6 rounded-lg border border-purple-200 bg-purple-50 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="font-semibold text-purple-900">
-                  Personalize Wingman in 90 seconds
-                </h3>
-                <p className="mt-1 text-sm text-purple-800">
-                  Six quick questions so the reflection prompts and nudges
-                  match how you actually think.
-                </p>
-              </div>
-              <Link
-                href="/assessment"
-                className="rounded-md bg-purple-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-800 shrink-0"
-              >
-                Start
-              </Link>
-            </div>
-          </div>
-        )}
-
-        {showOnboardingBanner && (
-          <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="font-semibold text-blue-900">
-                  👋 We&apos;ve classified your inbox.
-                </h3>
-                <p className="mt-1 text-sm text-blue-800">
-                  Try generating your first draft reply — click any Urgent or
-                  Important email below.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleDismissBanner}
-                className="text-xs text-blue-700 hover:text-blue-900 underline shrink-0"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
-
-        {nudges.widget && (
-          <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <h3 className="font-semibold text-slate-900">
-              {nudges.widget.title}
-            </h3>
-            <p className="mt-1 text-sm text-slate-700">{nudges.widget.body}</p>
-          </div>
-        )}
-
-        {/* Proactive safety nudge — fires when user has hit the safety
-            boundary 3+ times in the last 7 days. Per Tab 2 01:05 UTC lock,
-            this is a gentle reminder that Wingman isn't built for the
-            weight they're carrying. No content shared, just the count
-            signal. */}
-        {escalationCount7d !== undefined && escalationCount7d >= 3 && (
-          <div className="mt-6 rounded-lg border border-rose-200 bg-rose-50 p-4">
-            <h3 className="font-semibold text-rose-900">
-              Wingman noticed you&apos;ve been carrying heavy weeks
-            </h3>
-            <p className="mt-1 text-sm text-rose-800">
-              We&apos;re not built for this kind of support — please consider
-              talking to a professional. Crisis resources:
-            </p>
-            <ul className="mt-2 text-sm text-rose-800 list-disc pl-5 space-y-0.5">
-              <li>India: iCall 9152987821, Vandrevala 1860-2662-345</li>
-              <li>US: 988 Suicide &amp; Crisis Lifeline</li>
-              <li>UK: Samaritans 116 123</li>
-              <li>
-                Elsewhere:{" "}
-                <a
-                  href="https://www.iasp.info/resources/Crisis_Centres"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline"
-                >
-                  IASP directory
-                </a>
-              </li>
-            </ul>
-          </div>
-        )}
-
-        {ingestError && (
-          <p className="mt-3 text-sm text-red-600">{ingestError}</p>
-        )}
-
-        {(meError || countsError) && (
-          <p className="mt-3 text-sm text-red-600">Could not load. Refresh.</p>
-        )}
-
-        <div className="mt-6 grid grid-cols-2 gap-4 max-w-md">
-          <div className="rounded-lg border border-gray-200 p-4">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">
-              Emails ingested
-            </div>
-            <div className="text-2xl font-semibold mt-1">
-              {counts?.total ?? "—"}
-            </div>
-          </div>
-          <div className="rounded-lg border border-gray-200 p-4">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">
-              Last sync
-            </div>
-            <div className="text-2xl font-semibold mt-1">
-              {formatRelativeTime(me?.lastIngestedAt)}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6">
-          <button
-            disabled
-            title="Available next session"
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
-          >
-            Classify all
-          </button>
-        </div>
-      </section>
-
-      <section className="max-w-4xl mx-auto mt-10">
-        <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-3 px-2">
           <div className="flex items-center gap-2 flex-wrap">
             {FILTERS.map((f) => {
               const c = countFor(counts, f.value);
@@ -712,13 +639,13 @@ export function DashboardView() {
         </div>
 
         {counts && counts.pending > 0 && (
-          <p className="mb-3 text-sm text-gray-600">
+          <p className="mb-3 px-2 text-sm text-gray-600">
             Classifying your inbox… ({counts.pending} remaining)
           </p>
         )}
 
         {nudges.observations.length > 0 && (
-          <div className="mb-3 space-y-1">
+          <div className="mb-3 space-y-1 px-2">
             {nudges.observations.map((obs, i) => (
               <Link
                 key={i}
@@ -733,71 +660,41 @@ export function DashboardView() {
         )}
 
         {emailsHook.error ? (
-          <p className="mt-3 text-sm text-red-600">Could not load. Refresh.</p>
+          <p className="mt-3 px-2 text-sm text-red-600">
+            Could not load. Refresh.
+          </p>
         ) : loadingFirstPage ? (
-          <p className="text-gray-500 text-sm">Loading...</p>
+          <p className="px-2 text-gray-500 text-sm">Loading...</p>
         ) : emails.length === 0 ? (
-          <p className="text-gray-500 text-sm">{EMPTY_BUCKET_COPY[filter]}</p>
+          <p className="px-2 text-gray-500 text-sm">
+            {EMPTY_BUCKET_COPY[filter]}
+          </p>
         ) : (
           <>
-            <ul className="divide-y divide-gray-200 border-y border-gray-200">
+            <DashboardRowList>
               {emails.map((email) => {
-                const isArchive = email.classification === "archive";
                 const draft = Array.isArray(email.drafts)
                   ? email.drafts[0]
                   : email.drafts;
-                const isSent = draft?.status === "sent";
-                const fade = isArchive || isSent;
+                const fade =
+                  email.classification === "archive" ||
+                  draft?.status === "sent";
                 return (
-                  <li key={email.id}>
-                    <Link
-                      href={`/email/${email.id}`}
-                      className={`block py-3 px-2 -mx-2 hover:bg-gray-50 ${fade ? "opacity-60" : ""}`}
-                    >
-                      <div className="flex justify-between items-baseline gap-3">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          {email.classification && (
-                            <span
-                              className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 ${
-                                BADGE_STYLES[email.classification]
-                              }`}
-                            >
-                              {email.classification}
-                            </span>
-                          )}
-                          {isSent && (
-                            <span
-                              className="text-green-600 text-sm shrink-0"
-                              title="Replied"
-                              aria-label="Replied"
-                            >
-                              ✓
-                            </span>
-                          )}
-                          <span className="font-medium text-sm truncate">
-                            {email.from_address}
-                          </span>
-                        </div>
-                        <span className="text-xs text-gray-500 shrink-0">
-                          {formatEmailTime(email.received_at)}
-                        </span>
-                      </div>
-                      <div className="text-sm font-medium mt-0.5 truncate">
-                        {email.subject || "(no subject)"}
-                      </div>
-                      <div className="text-sm text-gray-600 mt-0.5 line-clamp-1">
-                        {email.snippet}
-                      </div>
-                      {email.classification_reason && (
-                        <div className="text-xs text-gray-500 mt-1 italic">
-                          {email.classification_reason}
-                        </div>
-                      )}
-                    </Link>
-                  </li>
+                  <DashboardRow
+                    key={email.id}
+                    dot={dotForClassification(email.classification)}
+                    dotLabel={`urgency: ${email.classification ?? "unknown"}`}
+                    time={formatRelativeAge(email.received_at)}
+                    title={email.subject || "(no subject)"}
+                    badge="gmail"
+                    hint="reply"
+                    href={`/email/${email.id}`}
+                    external={true}
+                    fade={fade}
+                  />
                 );
               })}
-            </ul>
+            </DashboardRowList>
             {!reachedEnd && !loadingMore && (
               <div className="mt-3 flex justify-center">
                 <button
@@ -815,41 +712,8 @@ export function DashboardView() {
             )}
           </>
         )}
+      </DashboardSection>
 
-        {/* Slack DM section — separate from the email list, filtered by the
-            same activeFilter. v0 limit: 20 most-recent classified messages,
-            no pagination. Hidden when no workspace is connected (banner up
-            top covers that CTA). */}
-        {slackWorkspace && slackMessages && slackMessages.length > 0 && (
-          <section className="mt-8">
-            <h2 className="text-sm font-semibold text-gray-700 mb-2">
-              Slack DMs
-            </h2>
-            <div className="space-y-1">
-              {slackMessages.map((m) => (
-                <SlackMessageRowView key={m.id} message={m} />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Notion Pages section — sits below Slack DMs, shares the activeFilter.
-            v0 limit: 20 most-recent classified pages, no pagination. Hidden
-            when no Notion integration is connected (banner above covers CTA).
-            Each row links out to the original page in Notion (target=_blank). */}
-        {notionIntegration && notionPages && notionPages.length > 0 && (
-          <section className="mt-8">
-            <h2 className="text-sm font-semibold text-gray-700 mb-2">
-              Notion Pages
-            </h2>
-            <div className="space-y-1">
-              {notionPages.map((p) => (
-                <NotionPageRowView key={p.id} page={p} />
-              ))}
-            </div>
-          </section>
-        )}
-      </section>
       <HelpMeThinkModal
         open={helpModalOpen}
         onClose={() => setHelpModalOpen(false)}

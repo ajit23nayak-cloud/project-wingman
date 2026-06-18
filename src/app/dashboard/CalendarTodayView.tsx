@@ -1,10 +1,18 @@
 "use client";
 
-// Today's Calendar — renders at the TOP of /dashboard above email/Slack/Notion.
+// Today's Calendar — renders near the top of /dashboard above email/Slack/Notion.
 // Calendar = highest time-sensitivity signal for a founder per Tab 2 06:05 UTC
 // spec. Today expanded by default, Tomorrow collapsible, no view past tomorrow.
 // All-day events as a thin strip above timed events. Cancelled filtered at the
 // query layer (event_status='confirmed').
+//
+// Dashboard redesign (08:30 + 08:55 UTC 2026-06-18): active rendering uses the
+// shared DashboardSection / DashboardRow primitives. Connect/Disconnected/
+// Loading banners are unchanged (not row-pattern surfaces). Event rows
+// preserve inline-expansion (Lock 2 spirit — expansion is the existing UX
+// contract). Lock 3 of 08:55: conference_link is exposed as a "join meeting ↗"
+// link INSIDE the expanded view (clean collapsed row); the row's primary click
+// toggles expand.
 
 import { useState } from "react";
 import Link from "next/link";
@@ -13,16 +21,14 @@ import {
   useCalendarToday,
   type CalendarEventRow,
 } from "@/lib/supabase/hooks";
-
-// Prep-priority badge palette. 'none' renders no badge (the absence-of-badge
-// state is itself the signal — no visual weight added when there's nothing
-// for the founder to prep).
-const PREP_BADGE: Record<NonNullable<CalendarEventRow["prep_priority"]>, string> = {
-  high: "bg-red-100 text-red-800 border-red-200",
-  medium: "bg-amber-100 text-amber-800 border-amber-200",
-  low: "bg-gray-100 text-gray-600 border-gray-200",
-  none: "",
-};
+import {
+  DashboardRow,
+  DashboardRowList,
+  DashboardSection,
+  DashboardSectionHeader,
+  dotForPrepPriority,
+  formatClock24,
+} from "./_primitives";
 
 export function CalendarTodayView() {
   const { data: credentials, isLoading: credsLoading } =
@@ -109,127 +115,79 @@ export function CalendarTodayView() {
   const timedToday = upcoming.filter((ev) => !ev.all_day);
 
   return (
-    <section className="max-w-4xl mx-auto mt-6">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900">
-          Today&apos;s Calendar
-        </h2>
-      </div>
-
+    <DashboardSection>
+      <DashboardSectionHeader
+        title="calendar"
+        count={`${timedToday.length} today`}
+      />
       {allDayToday.length > 0 && (
-        <div className="mb-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700">
-          <span className="font-medium">All day:</span>{" "}
+        <div className="mx-2 mb-1 rounded border-[0.5px] border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
+          <span className="font-mono lowercase">all day:</span>{" "}
           {allDayToday.map((ev) => ev.title).join(" · ")}
         </div>
       )}
-
       {timedToday.length === 0 && allDayToday.length === 0 && (
-        <p className="text-sm text-gray-500">
+        <p className="px-2 py-1 text-xs text-gray-500">
           No more meetings today. Enjoy the space.
         </p>
       )}
-
       {timedToday.length > 0 && (
-        <div className="space-y-1">
+        <DashboardRowList>
           {timedToday.map((ev) => (
             <EventRow key={ev.id} event={ev} />
           ))}
-        </div>
+        </DashboardRowList>
       )}
-
       <button
         type="button"
         onClick={() => setTomorrowOpen((v) => !v)}
-        className="mt-4 flex items-center gap-1 text-xs text-gray-600 hover:text-gray-900"
+        className="ml-2 mt-2 font-mono text-[11px] lowercase text-gray-500 hover:text-gray-900"
       >
-        Tomorrow {tomorrowOpen ? "▴" : "▾"}{" "}
-        {tomorrow.length > 0 ? `(${tomorrow.length})` : ""}
+        tomorrow {tomorrowOpen ? "▴" : "▾"}
+        {tomorrow.length > 0 ? ` (${tomorrow.length})` : ""}
       </button>
-
       {tomorrowOpen && (
-        <div className="mt-2 space-y-1">
+        <div className="mt-1">
           {tomorrow.length === 0 ? (
-            <p className="text-xs text-gray-500">Nothing scheduled.</p>
+            <p className="px-2 text-[11px] text-gray-500">Nothing scheduled.</p>
           ) : (
-            tomorrow.map((ev) => <EventRow key={ev.id} event={ev} />)
+            <DashboardRowList>
+              {tomorrow.map((ev) => (
+                <EventRow key={ev.id} event={ev} />
+              ))}
+            </DashboardRowList>
           )}
         </div>
       )}
-    </section>
+    </DashboardSection>
   );
 }
 
-// Single event row. Inline-expandable on click. Conference-link "Join" button
-// stops propagation so opening Zoom/Meet doesn't also toggle the expand state.
+// Single event row. Inline-expandable on click — preserves the existing
+// expansion UX (prep notes / location / attendees / join link). Lock 3 of
+// 08:55 routes conference_link into the expanded "join meeting ↗" link; the
+// collapsed row stays clean.
 function EventRow({ event }: { event: CalendarEventRow }) {
   const [expanded, setExpanded] = useState(false);
-  const start = new Date(event.start_at);
-  const end = new Date(event.end_at);
-  const startStr = start.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const durMin = Math.round((end.getTime() - start.getTime()) / 60000);
-  const durStr =
-    durMin >= 60
-      ? `${Math.floor(durMin / 60)}h${durMin % 60 ? ` ${durMin % 60}m` : ""}`
-      : `${durMin}m`;
-  const prepClass =
-    event.prep_priority && event.prep_priority !== "none"
-      ? PREP_BADGE[event.prep_priority]
-      : "";
+  // start_at is an ISO string from supabase — wrap in Date for the epoch-ms
+  // input formatClock24 expects.
+  const startMs = new Date(event.start_at).getTime();
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => setExpanded((v) => !v)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          setExpanded((v) => !v);
+    <div>
+      <DashboardRow
+        dot={dotForPrepPriority(event.prep_priority)}
+        dotLabel={`prep priority: ${event.prep_priority ?? "none"}`}
+        time={formatClock24(startMs)}
+        title={event.title}
+        badge="calendar"
+        hint={
+          expanded ? "collapse" : event.conference_link ? "join" : "open"
         }
-      }}
-      className="cursor-pointer rounded-md border border-gray-100 bg-white hover:border-gray-300"
-    >
-      <div className="flex items-center gap-3 px-3 py-2">
-        <span className="w-12 shrink-0 font-mono text-xs text-gray-600">
-          {startStr}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-gray-900">
-              {event.title}
-            </span>
-            {event.prep_priority && event.prep_priority !== "none" && (
-              <span
-                className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase ${prepClass}`}
-              >
-                {event.prep_priority} prep
-              </span>
-            )}
-          </div>
-        </div>
-        <span className="shrink-0 text-xs text-gray-500">{durStr}</span>
-        {event.attendee_count != null && event.attendee_count > 1 && (
-          <span className="shrink-0 text-xs text-gray-500">
-            {event.attendee_count}p
-          </span>
-        )}
-        {event.conference_link && (
-          <a
-            href={event.conference_link}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="shrink-0 text-xs font-medium text-blue-700 hover:underline"
-          >
-            Join
-          </a>
-        )}
-      </div>
+        onClick={() => setExpanded((v) => !v)}
+      />
       {expanded && (
-        <div className="space-y-1 border-t border-gray-100 px-3 py-2 text-xs text-gray-700">
+        <div className="border-t-[0.5px] border-gray-100 bg-gray-50/50 px-3 py-2 text-[11px] text-gray-700 space-y-1">
           {event.prep_notes && (
             <p>
               <strong>Prep:</strong> {event.prep_notes}
@@ -251,15 +209,13 @@ function EventRow({ event }: { event: CalendarEventRow }) {
           )}
           {event.conference_link && (
             <p>
-              <strong>Link:</strong>{" "}
               <a
                 href={event.conference_link}
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="text-blue-700 hover:underline"
+                className="font-mono lowercase text-blue-700 hover:underline"
               >
-                {event.conference_link}
+                join meeting ↗
               </a>
             </p>
           )}

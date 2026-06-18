@@ -1,15 +1,26 @@
 "use client";
 
-// Dashboard "People to reach out to" section. Renders the top-5 contacts whose
-// cadence has broken (last_seen_at older than the user's typical cadence). Per
-// Tab 2 09:35 UTC architectural lock: this section sits ABOVE CalendarTodayView
-// AND ONLY renders when non-empty — Tab 1 D5 forbids empty-state placeholders
-// cluttering the dashboard. Loading state is silent (returns null) for the same
-// reason: a skeleton above Today's Calendar would be a visual jolt for users
-// with no cadence flags.
+// Dashboard "cadence" section. Renders the top-5 contacts whose cadence has
+// broken (last_seen_at older than the user's typical cadence). Per Tab 2
+// 09:35 UTC architectural lock: this section sits ABOVE CalendarTodayView AND
+// ONLY renders when non-empty — Tab 1 D5 forbids empty-state placeholders
+// cluttering the dashboard. Loading state is silent (returns null) for the
+// same reason: a skeleton above Today's Calendar would be a visual jolt for
+// users with no cadence flags.
+//
+// Redesign (08:30 + 08:55 UTC 2026-06-18): uses the shared DashboardRow
+// pattern. Lock 3: cadence rows open `/contacts/[id]` in the SAME tab (this
+// is a Wingman-internal navigation, not external), so external={false}.
 
-import Link from "next/link";
 import { useContacts } from "@/lib/supabase/hooks";
+import {
+  DashboardRow,
+  DashboardRowList,
+  DashboardSection,
+  DashboardSectionHeader,
+  dotForCadenceDays,
+  formatCadenceDays,
+} from "./_primitives";
 
 export function CadenceFlagsView() {
   const { data: contacts, isLoading } = useContacts("cadence-break");
@@ -21,32 +32,27 @@ export function CadenceFlagsView() {
 
   const top = contacts.slice(0, 5);
   return (
-    <section className="max-w-4xl mx-auto mt-6">
-      <h2 className="text-base font-semibold text-gray-900 mb-2">
-        People to reach out to
-      </h2>
-      <div className="space-y-1">
+    <DashboardSection>
+      <DashboardSectionHeader title="cadence" count={`${top.length} cold`} />
+      <DashboardRowList>
         {top.map((c) => (
-          <Link
+          <DashboardRow
             key={c.id}
+            dot={dotForCadenceDays(c.cadence_break_days)}
+            dotLabel={
+              c.cadence_break_days == null
+                ? "cadence unknown"
+                : `${c.cadence_break_days} days since contact`
+            }
+            time={formatCadenceDays(c.cadence_break_days)}
+            title={c.display_name}
+            badge="cadence"
+            hint="reach out"
             href={`/contacts/${c.id}`}
-            className="flex items-center justify-between rounded-md border border-amber-100 bg-amber-50 px-3 py-2 hover:border-amber-300"
-          >
-            <span className="text-sm text-amber-900">{c.display_name}</span>
-            <span className="text-xs text-amber-700">
-              {weeksAgo(c.cadence_break_days)} weeks
-            </span>
-          </Link>
+            external={false}
+          />
         ))}
-      </div>
-    </section>
+      </DashboardRowList>
+    </DashboardSection>
   );
-}
-
-// Format cadence-break days as integer weeks. v0 simplification — under 7 days
-// returns "0", which would only render if the API returned a row with sub-week
-// cadence break (shouldn't happen, defensive only).
-function weeksAgo(days: number | null): string {
-  if (!days) return "0";
-  return Math.floor(days / 7).toString();
 }
