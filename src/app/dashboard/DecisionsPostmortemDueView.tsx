@@ -12,7 +12,10 @@
 // postmortem_due_at (the ±N days countdown) — confirmed against
 // DecisionRow.postmortem_due_at in src/lib/supabase/hooks.ts.
 
-import { useDecisions } from "@/lib/supabase/hooks";
+import {
+  useDecisions,
+  type FeedbackSourceTable,
+} from "@/lib/supabase/hooks";
 import {
   DashboardRow,
   DashboardRowList,
@@ -22,7 +25,21 @@ import {
   formatPostmortemDays,
 } from "./_primitives";
 
-export function DecisionsPostmortemDueView() {
+type DecisionsPostmortemDueViewProps = {
+  // Commit 12: parent forwards this so each decision row can open the
+  // feedback popover. Curried with sourceTable='decisions' + sourceId=d.id.
+  onCommentClick?: (
+    sourceTable: FeedbackSourceTable,
+    sourceId: string,
+    dashboardSection: string,
+    anchorEl: HTMLElement,
+    title: string,
+  ) => void;
+};
+
+export function DecisionsPostmortemDueView({
+  onCommentClick,
+}: DecisionsPostmortemDueViewProps = {}) {
   const { data: decisions, isLoading } = useDecisions("postmortem_due");
 
   if (isLoading || !decisions || decisions.length === 0) return null;
@@ -53,6 +70,20 @@ export function DecisionsPostmortemDueView() {
               hint="write"
               href={`/decisions/${d.id}`}
               external={false}
+              sourceTable="decisions"
+              sourceId={d.id}
+              onCommentClick={
+                onCommentClick
+                  ? (anchorEl, title) =>
+                      onCommentClick(
+                        "decisions",
+                        d.id,
+                        "decisions",
+                        anchorEl,
+                        title,
+                      )
+                  : undefined
+              }
             />
           );
         })}

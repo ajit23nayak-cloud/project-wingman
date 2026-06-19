@@ -1492,3 +1492,217 @@ export function useTriggerIngest() {
     return { ok: true, ingested: body.ingested };
   };
 }
+
+// --- feedback notes (Commit 12 in-dashboard widget) ------------------------
+//
+// Pinned shapes from GET/POST /api/feedback and GET/PATCH/DELETE
+// /api/feedback/[id]. `status` cycles open → addressed | dismissed per the
+// product spec (no schema-enforced transitions). source_table + source_id
+// are nullable when the note is sidebar-only ("global" feedback) and set
+// when the user authored the note from a specific dashboard row (orange-dot
+// indicator). dashboard_section is a free-text analytics tag.
+//
+// All ts fields are ISO strings.
+
+export type FeedbackStatus = "open" | "addressed" | "dismissed";
+
+export type FeedbackSourceTable =
+  | "emails"
+  | "slack_messages"
+  | "notion_pages"
+  | "calendar_events"
+  | "contacts"
+  | "decisions"
+  | "dashboard"
+  | "mh_banner";
+
+export type FeedbackFilter = FeedbackStatus | "all";
+
+export type FeedbackNote = {
+  id: string;
+  user_id: string;
+  dashboard_section: string | null;
+  source_table: FeedbackSourceTable | null;
+  source_id: string | null;
+  title: string;
+  body: string | null;
+  status: FeedbackStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+// Accepts `filter | null` — same null-gate pattern as useContacts/useDecisions.
+// Used by the sidebar feedback list and any filter chips. Null filter means
+// the hook is idle (no fetch).
+export function useFeedbackNotes(filter: FeedbackFilter | null) {
+  const { data: me } = useMe();
+  return useSWR<FeedbackNote[]>(
+    me && filter ? ["feedback_notes", filter, me.supabaseUserId] : null,
+    async () => {
+      const qs =
+        filter === "all" ? "status=all&limit=50" : `status=${filter}&limit=50`;
+      const res = await fetch(`/api/feedback?${qs}`);
+      if (!res.ok) throw new Error(`feedback_notes_${res.status}`);
+      const data = await res.json();
+      return (data.notes ?? []) as FeedbackNote[];
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+// Per-row scoped list — used by the orange-dot indicator. Filters to
+// status=open only because the indicator only surfaces for open notes per
+// spec. Null args → hook is idle.
+export function useFeedbackNotesForRow(
+  sourceTable: FeedbackSourceTable | null,
+  sourceId: string | null,
+) {
+  const { data: me } = useMe();
+  return useSWR<FeedbackNote[]>(
+    me && sourceTable && sourceId
+      ? [
+          "feedback_notes",
+          "for_row",
+          sourceTable,
+          sourceId,
+          me.supabaseUserId,
+        ]
+      : null,
+    async () => {
+      const qs = new URLSearchParams({
+        status: "open",
+        source_table: sourceTable as string,
+        source_id: sourceId as string,
+        limit: "50",
+      }).toString();
+      const res = await fetch(`/api/feedback?${qs}`);
+      if (!res.ok) throw new Error(`feedback_notes_for_row_${res.status}`);
+      const data = await res.json();
+      return (data.notes ?? []) as FeedbackNote[];
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+export type CreateFeedbackBody = {
+  title: string;
+  body?: string | null;
+  dashboard_section?: string | null;
+  source_table?: FeedbackSourceTable | null;
+  source_id?: string | null;
+};
+
+// POST /api/feedback. On success invalidates all feedback_notes SWR keys
+// (list + per-row scoped) so the sidebar and orange-dot indicators reflect
+// the new row immediately.
+export function useCreateFeedback() {
+  const { mutate } = useSWRConfig();
+  return async (
+    input: CreateFeedbackBody,
+  ): Promise<{ ok: boolean; error?: string; note?: FeedbackNote }> => {
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error ?? `create_${res.status}` };
+      }
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "feedback_notes",
+      );
+      return { ok: true, note: data.note as FeedbackNote };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+export type UpdateFeedbackPatch = Partial<{
+  title: string;
+  body: string | null;
+  status: FeedbackStatus;
+}>;
+
+// PATCH /api/feedback/[id]. Invalidates all feedback_notes SWR keys on
+// success so status flips (open → addressed/dismissed) propagate to the
+// sidebar list and the orange-dot indicator together.
+export function useUpdateFeedback() {
+  const { mutate } = useSWRConfig();
+  return async (
+    id: string,
+    patch: UpdateFeedbackPatch,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`/api/feedback/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        // Mirror useCreateFeedback: prefer the server's data.error code
+        // (e.g. "body_too_long", "invalid_body", "invalid_status") so the
+        // UI can surface a precise message. Fall back to the synthetic
+        // status-coded string if the body isn't JSON.
+        let serverError: string | undefined;
+        try {
+          const data = await res.json();
+          if (data && typeof data.error === "string") {
+            serverError = data.error;
+          }
+        } catch {
+          // body wasn't JSON — fall through to synthetic code
+        }
+        return { ok: false, error: serverError ?? `update_${res.status}` };
+      }
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "feedback_notes",
+      );
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+// DELETE /api/feedback/[id]. Hard delete — same as decisions. Invalidates
+// all feedback_notes SWR keys on success.
+export function useDeleteFeedback() {
+  const { mutate } = useSWRConfig();
+  return async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`/api/feedback/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        // Mirror useCreateFeedback: prefer the server's data.error code
+        // (e.g. "feedback_not_found") over the synthetic status string.
+        let serverError: string | undefined;
+        try {
+          const data = await res.json();
+          if (data && typeof data.error === "string") {
+            serverError = data.error;
+          }
+        } catch {
+          // body wasn't JSON — fall through to synthetic code
+        }
+        return { ok: false, error: serverError ?? `delete_${res.status}` };
+      }
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "feedback_notes",
+      );
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}

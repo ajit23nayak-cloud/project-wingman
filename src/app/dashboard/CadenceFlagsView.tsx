@@ -12,7 +12,10 @@
 // pattern. Lock 3: cadence rows open `/contacts/[id]` in the SAME tab (this
 // is a Wingman-internal navigation, not external), so external={false}.
 
-import { useContacts } from "@/lib/supabase/hooks";
+import {
+  useContacts,
+  type FeedbackSourceTable,
+} from "@/lib/supabase/hooks";
 import {
   DashboardRow,
   DashboardRowList,
@@ -22,7 +25,20 @@ import {
   formatCadenceDays,
 } from "./_primitives";
 
-export function CadenceFlagsView() {
+type CadenceFlagsViewProps = {
+  // Commit 12: parent (DashboardView) passes this so each cadence row can
+  // open the feedback popover anchored to itself. Curried per row with
+  // sourceTable='contacts' + sourceId=contact.id.
+  onCommentClick?: (
+    sourceTable: FeedbackSourceTable,
+    sourceId: string,
+    dashboardSection: string,
+    anchorEl: HTMLElement,
+    title: string,
+  ) => void;
+};
+
+export function CadenceFlagsView({ onCommentClick }: CadenceFlagsViewProps = {}) {
   const { data: contacts, isLoading } = useContacts("cadence-break");
 
   // Silent until we have something to show. Loading + empty both → null so the
@@ -50,6 +66,20 @@ export function CadenceFlagsView() {
             hint="reach out"
             href={`/contacts/${c.id}`}
             external={false}
+            sourceTable="contacts"
+            sourceId={c.id}
+            onCommentClick={
+              onCommentClick
+                ? (anchorEl, title) =>
+                    onCommentClick(
+                      "contacts",
+                      c.id,
+                      "cadence",
+                      anchorEl,
+                      title,
+                    )
+                : undefined
+            }
           />
         ))}
       </DashboardRowList>

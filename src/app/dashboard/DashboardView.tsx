@@ -11,7 +11,7 @@
 // → OKR → Calendar → Slack → Notion → Email (last). Email rows open in new
 // tab per Lock 2.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUser, UserButton } from "@clerk/nextjs";
@@ -20,6 +20,9 @@ import { CalendarTodayView } from "./CalendarTodayView";
 import { CadenceFlagsView } from "./CadenceFlagsView";
 import { DecisionsPostmortemDueView } from "./DecisionsPostmortemDueView";
 import { OKRTrackerView } from "./OKRTrackerView";
+import { FeedbackButton } from "@/components/feedback/FeedbackButton";
+import { FeedbackPopover } from "@/components/feedback/FeedbackPopover";
+import { FeedbackSidebar } from "@/components/feedback/FeedbackSidebar";
 import {
   DashboardRow,
   DashboardSection,
@@ -44,6 +47,7 @@ import {
   useNotionPages,
   markNudgeWidgetSeen,
   type Counts,
+  type FeedbackSourceTable,
   type FilterValue,
   type EmailRow,
 } from "@/lib/supabase/hooks";
@@ -131,6 +135,56 @@ export function DashboardView() {
 
   const [filter, setFilter] = useState<FilterValue>("all");
   const [helpModalOpen, setHelpModalOpen] = useState(false);
+
+  // Commit 12 feedback widget state. `sidebarOpen` controls the slide-in
+  // FeedbackSidebar; `popoverState` is the singleton popover (null = closed,
+  // object = open and anchored to a specific row). Only one popover can be
+  // open at a time across the whole dashboard.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [popoverState, setPopoverState] = useState<{
+    anchorEl: HTMLElement | null;
+    initialTitle: string;
+    sourceTable: FeedbackSourceTable | null;
+    sourceId: string | null;
+    dashboardSection: string | null;
+  } | null>(null);
+
+  const openCommentForRow = useCallback(
+    (
+      sourceTable: FeedbackSourceTable,
+      sourceId: string,
+      dashboardSection: string,
+      anchorEl: HTMLElement,
+      title: string,
+    ) => {
+      setPopoverState({
+        anchorEl,
+        initialTitle: title,
+        sourceTable,
+        sourceId,
+        dashboardSection,
+      });
+    },
+    [],
+  );
+
+  // Cmd+Shift+R / Ctrl+Shift+R toggles the review-notes sidebar. NOTE:
+  // Cmd+Shift+R is the browser's "hard reload" shortcut, so preventDefault
+  // is critical — otherwise the keybind blasts the page reload instead.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.shiftKey &&
+        e.key.toLowerCase() === "r"
+      ) {
+        e.preventDefault();
+        setSidebarOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const { data: me, error: meError } = useMe();
   const { data: counts, error: countsError } = useCounts();
@@ -437,6 +491,17 @@ export function DashboardView() {
                 hint="start"
                 href="/assessment"
                 external={false}
+                sourceTable="mh_banner"
+                sourceId="assessment"
+                onCommentClick={(anchorEl, title) =>
+                  openCommentForRow(
+                    "mh_banner",
+                    "assessment",
+                    "alerts",
+                    anchorEl,
+                    title,
+                  )
+                }
               />
             )}
             {showOnboardingBanner && (
@@ -448,6 +513,17 @@ export function DashboardView() {
                 badge="nudge"
                 hint="dismiss"
                 onClick={handleDismissBanner}
+                sourceTable="mh_banner"
+                sourceId="onboarding"
+                onCommentClick={(anchorEl, title) =>
+                  openCommentForRow(
+                    "mh_banner",
+                    "onboarding",
+                    "alerts",
+                    anchorEl,
+                    title,
+                  )
+                }
               />
             )}
             {nudges.widget && (
@@ -458,6 +534,17 @@ export function DashboardView() {
                 title={nudges.widget.title}
                 badge="nudge"
                 hint=""
+                sourceTable="mh_banner"
+                sourceId="nudge"
+                onCommentClick={(anchorEl, title) =>
+                  openCommentForRow(
+                    "mh_banner",
+                    "nudge",
+                    "alerts",
+                    anchorEl,
+                    title,
+                  )
+                }
               />
             )}
             {showEscalationBanner && (
@@ -468,6 +555,17 @@ export function DashboardView() {
                 title="Wingman noticed you've been carrying heavy weeks"
                 badge="mh"
                 hint=""
+                sourceTable="mh_banner"
+                sourceId="escalation"
+                onCommentClick={(anchorEl, title) =>
+                  openCommentForRow(
+                    "mh_banner",
+                    "escalation",
+                    "alerts",
+                    anchorEl,
+                    title,
+                  )
+                }
               />
             )}
           </DashboardRowList>
@@ -492,10 +590,10 @@ export function DashboardView() {
           MH alerts → Cadence → Decisions → OKR → Calendar → Slack → Notion →
           Email (LAST). Strategic surfaces above tactical so we don't
           re-trigger inbox-zero anxiety. */}
-      <CadenceFlagsView />
-      <DecisionsPostmortemDueView />
-      <OKRTrackerView />
-      <CalendarTodayView />
+      <CadenceFlagsView onCommentClick={openCommentForRow} />
+      <DecisionsPostmortemDueView onCommentClick={openCommentForRow} />
+      <OKRTrackerView onCommentClick={openCommentForRow} />
+      <CalendarTodayView onCommentClick={openCommentForRow} />
 
       {/* Connect Slack banner — sits right above the Slack DMs section so it
           reads as per-section context, not a global CTA. Hidden once a
@@ -545,6 +643,17 @@ export function DashboardView() {
                   m.channel_id,
                 )}
                 external={true}
+                sourceTable="slack_messages"
+                sourceId={m.id}
+                onCommentClick={(anchorEl, title) =>
+                  openCommentForRow(
+                    "slack_messages",
+                    m.id,
+                    "slack",
+                    anchorEl,
+                    title,
+                  )
+                }
               />
             ))}
           </DashboardRowList>
@@ -600,6 +709,17 @@ export function DashboardView() {
                   hint="open"
                   href={p.url ?? undefined}
                   external={true}
+                  sourceTable="notion_pages"
+                  sourceId={p.id}
+                  onCommentClick={(anchorEl, title) =>
+                    openCommentForRow(
+                      "notion_pages",
+                      p.id,
+                      "notion",
+                      anchorEl,
+                      title,
+                    )
+                  }
                 />
               ))}
           </DashboardRowList>
@@ -691,6 +811,17 @@ export function DashboardView() {
                     href={`/email/${email.id}`}
                     external={true}
                     fade={fade}
+                    sourceTable="emails"
+                    sourceId={email.id}
+                    onCommentClick={(anchorEl, title) =>
+                      openCommentForRow(
+                        "emails",
+                        email.id,
+                        "emails",
+                        anchorEl,
+                        title,
+                      )
+                    }
                   />
                 );
               })}
@@ -718,6 +849,32 @@ export function DashboardView() {
         open={helpModalOpen}
         onClose={() => setHelpModalOpen(false)}
       />
+
+      {/* Commit 12 in-dashboard feedback widget. FeedbackButton is the
+          floating "+" CTA (bottom-right). FeedbackSidebar is the slide-in
+          review panel (opened via the button's "View all notes", a row's
+          popover footer, or Cmd+Shift+R). FeedbackPopover is the singleton
+          authoring popover, anchored to whichever surface fired it. */}
+      <FeedbackButton onOpenSidebar={() => setSidebarOpen(true)} />
+      <FeedbackSidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
+      {popoverState && (
+        <FeedbackPopover
+          isOpen={true}
+          onClose={() => setPopoverState(null)}
+          anchorEl={popoverState.anchorEl}
+          initialTitle={popoverState.initialTitle}
+          sourceTable={popoverState.sourceTable}
+          sourceId={popoverState.sourceId}
+          dashboardSection={popoverState.dashboardSection}
+          onViewAll={() => {
+            setPopoverState(null);
+            setSidebarOpen(true);
+          }}
+        />
+      )}
     </main>
   );
 }

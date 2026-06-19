@@ -9,7 +9,9 @@
 // All sections wrap in DashboardSection (10px padding, 0.5px separator).
 
 import Link from "next/link";
-import type { MouseEventHandler, ReactNode } from "react";
+import type { MouseEvent, MouseEventHandler, ReactNode } from "react";
+import type { FeedbackSourceTable } from "@/lib/supabase/hooks";
+import { RowCommentIndicator } from "@/components/feedback/RowCommentIndicator";
 
 export type DashboardDotColor = "red" | "amber" | "green" | "grey";
 
@@ -51,6 +53,15 @@ type DashboardRowProps = {
   onClick?: MouseEventHandler<HTMLElement>;
   // Visual fade for archived/sent rows.
   fade?: boolean;
+  // Commit 12 feedback hook-up. When sourceTable+sourceId are set, a
+  // RowCommentIndicator (orange dot) renders in the badge area for rows
+  // with open notes. When onCommentClick is ALSO set, a hover-visible
+  // "💬" affordance renders on the right and fires the callback with the
+  // clicked element + row title (used by DashboardView to anchor the
+  // FeedbackPopover).
+  sourceTable?: FeedbackSourceTable;
+  sourceId?: string;
+  onCommentClick?: (anchorEl: HTMLElement, prefilledTitle: string) => void;
 };
 
 // Single dashboard row — pure visual. No internal state; callers wrap with
@@ -67,7 +78,30 @@ export function DashboardRow({
   external,
   onClick,
   fade,
+  sourceTable,
+  sourceId,
+  onCommentClick,
 }: DashboardRowProps) {
+  // Commit 12: only render the comment-affordance + indicator when the row
+  // is wired with both sourceTable and sourceId. This keeps backwards-compat
+  // with rows that haven't been threaded yet.
+  const hasSource = !!(sourceTable && sourceId);
+  const canComment = hasSource && !!onCommentClick;
+
+  // The comment button is rendered as an interactive <span> with role/tabIndex
+  // rather than a <button> because DashboardRow's outer element is often an
+  // <a>/<Link>, and a <button> inside an <a> is invalid HTML. The span sits
+  // INSIDE the wrapper but stops propagation on click/key so it doesn't fire
+  // the wrapper's navigation. (See spec note: "absolute-positioned-link" is
+  // the alternative, but rejected here — it would require restructuring every
+  // existing wrapper branch and risks regressing the row's click target.)
+  const handleCommentClick = (e: MouseEvent<HTMLSpanElement>) => {
+    if (!onCommentClick) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onCommentClick(e.currentTarget, title);
+  };
+
   const inner = (
     <div
       className={`flex items-center gap-3 px-2 py-1.5 ${
@@ -84,12 +118,40 @@ export function DashboardRow({
       <span className="flex-1 truncate text-sm font-medium text-gray-900">
         {title}
       </span>
-      <span className="shrink-0 rounded border-[0.5px] border-gray-200 bg-gray-50 px-1.5 py-0.5 font-mono text-[11px] lowercase text-gray-500">
-        {badge}
+      <span className="flex shrink-0 items-center">
+        <span className="rounded border-[0.5px] border-gray-200 bg-gray-50 px-1.5 py-0.5 font-mono text-[11px] lowercase text-gray-500">
+          {badge}
+        </span>
+        {hasSource && (
+          <RowCommentIndicator
+            sourceTable={sourceTable as FeedbackSourceTable}
+            sourceId={sourceId as string}
+          />
+        )}
       </span>
       <span className="ml-2 shrink-0 font-mono text-[11px] lowercase text-gray-500 group-hover:text-gray-900">
         {hint}
       </span>
+      {canComment && (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label="Add comment"
+          onClick={handleCommentClick}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              if (onCommentClick) {
+                onCommentClick(e.currentTarget, title);
+              }
+            }
+          }}
+          className="ml-1 shrink-0 cursor-pointer rounded px-1 text-xs opacity-0 transition-opacity hover:bg-gray-100 group-hover:opacity-100"
+        >
+          💬
+        </span>
+      )}
     </div>
   );
 
@@ -127,10 +189,26 @@ export function DashboardRow({
     );
   }
   if (onClick) {
+    // Use <div role="button"> instead of <button> here because the row
+    // contains a nested interactive (the 💬 affordance is a span with
+    // role="button"). A <button> inside a <button> is invalid HTML and
+    // breaks accessibility. <a> can host a role="button" child per a
+    // WHATWG carve-out, so the href branches above are unaffected.
     return (
-      <button type="button" onClick={onClick} className={wrapperClass}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick?.(e as unknown as MouseEvent<HTMLDivElement>);
+          }
+        }}
+        className={wrapperClass}
+      >
         {inner}
-      </button>
+      </div>
     );
   }
   return <div className={wrapperClass}>{inner}</div>;

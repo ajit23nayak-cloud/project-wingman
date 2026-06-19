@@ -20,6 +20,7 @@ import {
   useCalendarCredentials,
   useCalendarToday,
   type CalendarEventRow,
+  type FeedbackSourceTable,
 } from "@/lib/supabase/hooks";
 import {
   DashboardRow,
@@ -30,7 +31,21 @@ import {
   formatClock24,
 } from "./_primitives";
 
-export function CalendarTodayView() {
+type CalendarTodayViewProps = {
+  // Commit 12: parent forwards this so each event row can open the feedback
+  // popover. Curried with sourceTable='calendar_events' + sourceId=ev.id.
+  onCommentClick?: (
+    sourceTable: FeedbackSourceTable,
+    sourceId: string,
+    dashboardSection: string,
+    anchorEl: HTMLElement,
+    title: string,
+  ) => void;
+};
+
+export function CalendarTodayView({
+  onCommentClick,
+}: CalendarTodayViewProps = {}) {
   const { data: credentials, isLoading: credsLoading } =
     useCalendarCredentials();
   // Only enable the events query when credentials are present AND active.
@@ -134,7 +149,11 @@ export function CalendarTodayView() {
       {timedToday.length > 0 && (
         <DashboardRowList>
           {timedToday.map((ev) => (
-            <EventRow key={ev.id} event={ev} />
+            <EventRow
+              key={ev.id}
+              event={ev}
+              onCommentClick={onCommentClick}
+            />
           ))}
         </DashboardRowList>
       )}
@@ -153,7 +172,11 @@ export function CalendarTodayView() {
           ) : (
             <DashboardRowList>
               {tomorrow.map((ev) => (
-                <EventRow key={ev.id} event={ev} />
+                <EventRow
+                  key={ev.id}
+                  event={ev}
+                  onCommentClick={onCommentClick}
+                />
               ))}
             </DashboardRowList>
           )}
@@ -167,7 +190,12 @@ export function CalendarTodayView() {
 // expansion UX (prep notes / location / attendees / join link). Lock 3 of
 // 08:55 routes conference_link into the expanded "join meeting ↗" link; the
 // collapsed row stays clean.
-function EventRow({ event }: { event: CalendarEventRow }) {
+type EventRowProps = {
+  event: CalendarEventRow;
+  onCommentClick?: CalendarTodayViewProps["onCommentClick"];
+};
+
+function EventRow({ event, onCommentClick }: EventRowProps) {
   const [expanded, setExpanded] = useState(false);
   // start_at is an ISO string from supabase — wrap in Date for the epoch-ms
   // input formatClock24 expects.
@@ -185,6 +213,20 @@ function EventRow({ event }: { event: CalendarEventRow }) {
           expanded ? "collapse" : event.conference_link ? "join" : "open"
         }
         onClick={() => setExpanded((v) => !v)}
+        sourceTable="calendar_events"
+        sourceId={event.id}
+        onCommentClick={
+          onCommentClick
+            ? (anchorEl, title) =>
+                onCommentClick(
+                  "calendar_events",
+                  event.id,
+                  "calendar",
+                  anchorEl,
+                  title,
+                )
+            : undefined
+        }
       />
       {expanded && (
         <div className="border-t-[0.5px] border-gray-100 bg-gray-50/50 px-3 py-2 text-[11px] text-gray-700 space-y-1">

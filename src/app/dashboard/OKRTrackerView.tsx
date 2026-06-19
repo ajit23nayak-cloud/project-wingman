@@ -20,6 +20,7 @@ import { useState } from "react";
 import {
   useNotionIntegration,
   useOKRs,
+  type FeedbackSourceTable,
   type OKRPageRow,
 } from "@/lib/supabase/hooks";
 import {
@@ -31,7 +32,20 @@ import {
   formatRelativeAge,
 } from "./_primitives";
 
-export function OKRTrackerView() {
+type OKRTrackerViewProps = {
+  // Commit 12: parent forwards this so each OKR row can open the feedback
+  // popover. Source row is the Notion page that backs the OKR — curried
+  // with sourceTable='notion_pages' + sourceId=page.id.
+  onCommentClick?: (
+    sourceTable: FeedbackSourceTable,
+    sourceId: string,
+    dashboardSection: string,
+    anchorEl: HTMLElement,
+    title: string,
+  ) => void;
+};
+
+export function OKRTrackerView({ onCommentClick }: OKRTrackerViewProps = {}) {
   const { data: notionIntegration } = useNotionIntegration();
   const enabled = notionIntegration?.status === "active";
   const { data: okrs, isLoading } = useOKRs(enabled);
@@ -46,14 +60,23 @@ export function OKRTrackerView() {
       <DashboardSectionHeader title="okrs" count={`${okrs.length} active`} />
       <DashboardRowList>
         {okrs.map((page) => (
-          <OKRCard key={page.id} page={page} />
+          <OKRCard
+            key={page.id}
+            page={page}
+            onCommentClick={onCommentClick}
+          />
         ))}
       </DashboardRowList>
     </DashboardSection>
   );
 }
 
-function OKRCard({ page }: { page: OKRPageRow }) {
+type OKRCardProps = {
+  page: OKRPageRow;
+  onCommentClick?: OKRTrackerViewProps["onCommentClick"];
+};
+
+function OKRCard({ page, onCommentClick }: OKRCardProps) {
   const [expanded, setExpanded] = useState(false);
   const structured = page.okr_structured;
   const objectives = structured?.objectives ?? [];
@@ -87,6 +110,20 @@ function OKRCard({ page }: { page: OKRPageRow }) {
         badge="okr"
         hint={expanded ? "collapse" : "open"}
         onClick={() => setExpanded((v) => !v)}
+        sourceTable="notion_pages"
+        sourceId={page.id}
+        onCommentClick={
+          onCommentClick
+            ? (anchorEl, title) =>
+                onCommentClick(
+                  "notion_pages",
+                  page.id,
+                  "okrs",
+                  anchorEl,
+                  title,
+                )
+            : undefined
+        }
       />
       {expanded && hasStructure && (
         <div className="border-t-[0.5px] border-gray-100 bg-gray-50/50 px-3 py-2 space-y-3">
