@@ -28,6 +28,8 @@ import {
   DashboardRowList,
   DashboardSection,
   DashboardSectionHeader,
+  SECTION_ACCENTS,
+  type ChipColor,
   dotForKrRollup,
   formatRelativeAge,
 } from "./_primitives";
@@ -50,14 +52,42 @@ export function OKRTrackerView({ onCommentClick }: OKRTrackerViewProps = {}) {
   const enabled = notionIntegration?.status === "active";
   const { data: okrs, isLoading } = useOKRs(enabled);
 
-  // Silent when not connected, loading, or no OKR pages found.
+  // Silent when not connected or loading; positive empty state when
+  // connected with zero OKR pages (Mega-commit A #11).
   if (!enabled) return null;
   if (isLoading) return null;
-  if (!okrs || okrs.length === 0) return null;
+  if (!okrs || okrs.length === 0) {
+    return (
+      <DashboardSection accentColor={SECTION_ACCENTS.okrs}>
+        <DashboardSectionHeader title="okrs" />
+        <p className="px-2 py-1 font-serif text-xs italic text-gray-500">
+          No OKR pages in Notion yet — paste a quarterly OKR page and Wingman
+          will detect + render it here.
+        </p>
+      </DashboardSection>
+    );
+  }
+
+  const allConfidences = okrs.flatMap((p) =>
+    (p.okr_structured?.objectives ?? []).flatMap((o) =>
+      (o.key_results ?? []).map((kr) => kr.confidence),
+    ),
+  );
+  const chipColor: ChipColor = allConfidences.includes("red")
+    ? "red"
+    : allConfidences.includes("yellow")
+      ? "amber"
+      : allConfidences.includes("green")
+        ? "green"
+        : "grey";
 
   return (
-    <DashboardSection>
-      <DashboardSectionHeader title="okrs" count={`${okrs.length} active`} />
+    <DashboardSection accentColor={SECTION_ACCENTS.okrs}>
+      <DashboardSectionHeader
+        title="okrs"
+        count={`${okrs.length} active`}
+        chipColor={chipColor}
+      />
       <DashboardRowList>
         {okrs.map((page) => (
           <OKRCard

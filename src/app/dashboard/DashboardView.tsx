@@ -31,7 +31,10 @@ import {
   formatRelativeAge,
   dotForClassification,
   buildSlackChannelLink,
+  SECTION_ACCENTS,
 } from "./_primitives";
+import { DensityToggle, useDensity } from "@/components/dashboard/DensityToggle";
+import { EmailSlidePanel } from "@/components/dashboard/EmailSlidePanel";
 import {
   useMe,
   useCounts,
@@ -81,7 +84,7 @@ function SettingsIcon() {
 // reassuring, specific message per sprint-strategy.md section 2 friction
 // point "Empty bucket messaging when Urgent = 0."
 const EMPTY_BUCKET_COPY: Record<FilterValue, string> = {
-  all: "No emails ingested yet — try Refresh inbox.",
+  all: "All caught up — no emails to triage right now. Enjoy the breather.",
   urgent: "0 urgent emails right now. Looking calm — enjoy the breather.",
   important: "Nothing important needs your attention right now.",
   fyi: "No FYI items in view.",
@@ -133,8 +136,10 @@ export function DashboardView() {
     if (isLoaded && !isSignedIn) router.replace("/");
   }, [isLoaded, isSignedIn, router]);
 
+  const density = useDensity();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [helpModalOpen, setHelpModalOpen] = useState(false);
+  const [openEmailId, setOpenEmailId] = useState<string | null>(null);
 
   // Commit 12 feedback widget state. `sidebarOpen` controls the slide-in
   // FeedbackSidebar; `popoverState` is the singleton popover (null = closed,
@@ -324,7 +329,10 @@ export function DashboardView() {
     showEscalationBanner;
 
   return (
-    <main className="min-h-screen p-6">
+    <main
+      className="min-h-screen p-6 dashboard-surface"
+      data-density={density}
+    >
       <header className="flex justify-between items-center max-w-4xl mx-auto">
         <h1 className="text-xl font-semibold">Project Wingman</h1>
         <div className="flex items-center gap-3">
@@ -360,6 +368,7 @@ export function DashboardView() {
           >
             {isIngesting ? "Refreshing..." : "Refresh inbox"}
           </button>
+          <DensityToggle />
           <UserButton>
             <UserButton.MenuItems>
               <UserButton.Link
@@ -410,7 +419,9 @@ export function DashboardView() {
           progress + counts + Classify-all. NOT a DashboardSection — it's the
           opening "hello" card, not a list surface. */}
       <section className="max-w-4xl mx-auto mt-6">
-        <h2 className="text-lg font-semibold">Welcome, {firstName}.</h2>
+        <h2 className="font-serif text-2xl font-medium tracking-tight">
+          Welcome, {firstName}.
+        </h2>
 
         {isIngesting && firstIngestCount === null && (
           <div className="mt-3 flex items-center gap-3">
@@ -478,8 +489,12 @@ export function DashboardView() {
           resources list still renders below the escalation row to preserve
           discoverability per Lock 4 safety caveat. */}
       {showAnyMhBanner && (
-        <DashboardSection>
-          <DashboardSectionHeader title="alerts" count={null} />
+        <DashboardSection accentColor={SECTION_ACCENTS.alerts}>
+          <DashboardSectionHeader
+            title="alerts"
+            count={null}
+            chipColor={showEscalationBanner ? "red" : "amber"}
+          />
           <DashboardRowList>
             {showAssessmentBanner && (
               <DashboardRow
@@ -623,10 +638,11 @@ export function DashboardView() {
       {/* Slack DMs section — row pattern via DashboardRow. Hidden when no
           workspace connected (banner above covers CTA) or when no messages. */}
       {slackWorkspace && slackMessages && slackMessages.length > 0 && (
-        <DashboardSection>
+        <DashboardSection accentColor={SECTION_ACCENTS.slack}>
           <DashboardSectionHeader
             title="slack"
             count={`${slackMessages.length} dm${slackMessages.length === 1 ? "" : "s"}`}
+            chipColor="grey"
           />
           <DashboardRowList>
             {slackMessages.map((m) => (
@@ -690,10 +706,11 @@ export function DashboardView() {
       {/* Notion Pages section — row pattern via DashboardRow. Each row links
           out to the original page in Notion (external new tab per Lock 3). */}
       {notionIntegration && notionPages && notionPages.length > 0 && (
-        <DashboardSection>
+        <DashboardSection accentColor={SECTION_ACCENTS.notion}>
           <DashboardSectionHeader
             title="notion"
             count={`${notionPages.length} page${notionPages.length === 1 ? "" : "s"}`}
+            chipColor="grey"
           />
           <DashboardRowList>
             {notionPages
@@ -730,10 +747,11 @@ export function DashboardView() {
           observations stay attached. Rows use DashboardRow; email opens
           in new tab per Lock 2 to preserve dashboard context + draft-reply
           flow. */}
-      <DashboardSection>
+      <DashboardSection accentColor={SECTION_ACCENTS.email}>
         <DashboardSectionHeader
           title="email"
           count={`${counts?.total ?? 0}`}
+          chipColor={(counts?.urgent ?? 0) > 0 ? "red" : "grey"}
         />
 
         <div className="flex items-center justify-between mb-3 flex-wrap gap-3 px-2">
@@ -808,8 +826,7 @@ export function DashboardView() {
                     title={email.subject || "(no subject)"}
                     badge="gmail"
                     hint="reply"
-                    href={`/email/${email.id}`}
-                    external={true}
+                    onClick={() => setOpenEmailId(email.id)}
                     fade={fade}
                     sourceTable="emails"
                     sourceId={email.id}
@@ -875,6 +892,14 @@ export function DashboardView() {
           }}
         />
       )}
+
+      {/* Mega-commit A P0.3: clicking an email row opens a right-edge slide
+          panel instead of a new browser tab. /email/[id] route still works
+          for direct URL access; both render the same EmailDetailBody. */}
+      <EmailSlidePanel
+        emailId={openEmailId}
+        onClose={() => setOpenEmailId(null)}
+      />
     </main>
   );
 }

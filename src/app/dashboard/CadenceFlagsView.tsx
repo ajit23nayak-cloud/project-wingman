@@ -21,6 +21,7 @@ import {
   DashboardRowList,
   DashboardSection,
   DashboardSectionHeader,
+  SECTION_ACCENTS,
   dotForCadenceDays,
   formatCadenceDays,
 } from "./_primitives";
@@ -41,15 +42,29 @@ type CadenceFlagsViewProps = {
 export function CadenceFlagsView({ onCommentClick }: CadenceFlagsViewProps = {}) {
   const { data: contacts, isLoading } = useContacts("cadence-break");
 
-  // Silent until we have something to show. Loading + empty both → null so the
-  // dashboard's section order (cadence → decisions → calendar → email) stays
-  // tight when this section is irrelevant.
-  if (isLoading || !contacts || contacts.length === 0) return null;
+  // Silent during the loading flicker; switch to a positive empty state when
+  // the query lands with zero rows (Mega-commit A #11).
+  if (isLoading) return null;
+  if (!contacts || contacts.length === 0) {
+    return (
+      <DashboardSection accentColor={SECTION_ACCENTS.cadence}>
+        <DashboardSectionHeader title="cadence" />
+        <p className="px-2 py-1 font-serif text-xs italic text-gray-500">
+          All caught up — no relationships gone cold this week.
+        </p>
+      </DashboardSection>
+    );
+  }
 
   const top = contacts.slice(0, 5);
+  const anyOverdue = top.some((c) => (c.cadence_break_days ?? 0) >= 28);
   return (
-    <DashboardSection>
-      <DashboardSectionHeader title="cadence" count={`${top.length} cold`} />
+    <DashboardSection accentColor={SECTION_ACCENTS.cadence}>
+      <DashboardSectionHeader
+        title="cadence"
+        count={`${top.length} cold`}
+        chipColor={anyOverdue ? "red" : "amber"}
+      />
       <DashboardRowList>
         {top.map((c) => (
           <DashboardRow

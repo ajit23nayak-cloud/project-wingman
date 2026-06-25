@@ -16,6 +16,69 @@
   --surface: #ffffff;
   --background: var(--bg-light);
   --foreground: var(--text-dark);
+
+  /* Dashboard section accents (Mega-commit A #8). */
+  --accent-alerts: #E24B4A;
+  --accent-cadence: #1D9E75;
+  --accent-decisions: #EF9F27;
+  --accent-okrs: #97C459;
+  --accent-calendar: #378ADD;
+  --accent-slack: #7F77DD;
+  --accent-notion: #6E6AC4;
+  --accent-email: #888780;
+
+  /* Count-chip color pairs (#16). */
+  --chip-red-bg: #FEE2E2;
+  --chip-red-fg: #B91C1C;
+  --chip-amber-bg: #FEF3C7;
+  --chip-amber-fg: #B45309;
+  --chip-green-bg: #DCFCE7;
+  --chip-green-fg: #166534;
+  --chip-grey-bg: #F3F4F6;
+  --chip-grey-fg: #6B7280;
+
+  /* Subtle dashboard surface gradient (#13). */
+  --dashboard-grad-top: #FAFAF8;
+  --dashboard-grad-bottom: #FFFFFF;
+}
+
+.dashboard-surface {
+  background: linear-gradient(
+    180deg,
+    var(--dashboard-grad-top) 0%,
+    var(--dashboard-grad-bottom) 240px
+  );
+}
+
+/* Density toggle (#10). Drives row padding/font-size + section vertical
+   spacing. The toggle sets [data-density] on <main>; rows/sections opt in
+   via the dash-row-inner / dash-section classes added on the primitives. */
+[data-density="compact"] .dash-row-inner {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 12px;
+}
+[data-density="comfortable"] .dash-row-inner {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: 13.5px;
+}
+[data-density="spacious"] .dash-row-inner {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  font-size: 14px;
+}
+[data-density="compact"] .dash-section {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+[data-density="comfortable"] .dash-section {
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+[data-density="spacious"] .dash-section {
+  padding-top: 24px;
+  padding-bottom: 24px;
 }
 
 @theme inline {

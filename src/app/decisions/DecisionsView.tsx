@@ -54,9 +54,13 @@ export function DecisionsView() {
             <button
               type="button"
               onClick={() => setCreateOpen((v) => !v)}
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+              className={
+                createOpen
+                  ? "rounded-md border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50"
+                  : "rounded-md border border-black bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
+              }
             >
-              {createOpen ? "Close" : "New decision"}
+              {createOpen ? "Close" : "+ Add decision"}
             </button>
           </div>
         </header>
@@ -150,6 +154,7 @@ function CreateDecisionForm({
   const [decision, setDecision] = useState("");
   const [reasoning, setReasoning] = useState("");
   const [premortem, setPremortem] = useState("");
+  const [postmortemDueAt, setPostmortemDueAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -171,6 +176,9 @@ function CreateDecisionForm({
       decision: decision.trim() || null,
       reasoning: reasoning.trim() || null,
       premortem: premortem.trim() || null,
+      postmortem_due_at: postmortemDueAt
+        ? new Date(`${postmortemDueAt}T00:00:00`).toISOString()
+        : null,
     });
     setSubmitting(false);
     if (r.ok && r.id) {
@@ -241,6 +249,15 @@ function CreateDecisionForm({
           value={premortem}
           onChange={(e) => setPremortem(e.target.value)}
           rows={3}
+          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+        />
+      </Field>
+
+      <Field label="Postmortem due date (defaults to 30 days after decision date)">
+        <input
+          type="date"
+          value={postmortemDueAt}
+          onChange={(e) => setPostmortemDueAt(e.target.value)}
           className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
         />
       </Field>

@@ -9,9 +9,11 @@
 // All sections wrap in DashboardSection (10px padding, 0.5px separator).
 
 import Link from "next/link";
-import type { MouseEvent, MouseEventHandler, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, MouseEventHandler, ReactNode } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import type { FeedbackSourceTable } from "@/lib/supabase/hooks";
 import { RowCommentIndicator } from "@/components/feedback/RowCommentIndicator";
+import { SOURCE_ICON } from "@/components/icons/SourceIcons";
 
 export type DashboardDotColor = "red" | "amber" | "green" | "grey";
 
@@ -102,9 +104,10 @@ export function DashboardRow({
     onCommentClick(e.currentTarget, title);
   };
 
+  const Icon = SOURCE_ICON[badge] ?? null;
   const inner = (
     <div
-      className={`flex items-center gap-3 px-2 py-1.5 ${
+      className={`dash-row-inner flex items-center gap-3 px-2 ${
         fade ? "opacity-50" : ""
       }`}
     >
@@ -119,8 +122,12 @@ export function DashboardRow({
         {title}
       </span>
       <span className="flex shrink-0 items-center">
-        <span className="rounded border-[0.5px] border-gray-200 bg-gray-50 px-1.5 py-0.5 font-mono text-[11px] lowercase text-gray-500">
-          {badge}
+        <span
+          className="inline-flex items-center justify-center rounded border-[0.5px] border-gray-200 bg-gray-50 px-1.5 py-0.5 font-mono text-[11px] lowercase text-gray-500"
+          title={badge}
+          aria-label={badge}
+        >
+          {Icon ? <Icon className="h-3.5 w-3.5" /> : badge}
         </span>
         {hasSource && (
           <RowCommentIndicator
@@ -158,25 +165,32 @@ export function DashboardRow({
   const wrapperClass =
     "group block w-full text-left hover:bg-gray-50 transition-colors";
 
+  // Mega-commit A #15: rows fade out smoothly when archived/snoozed/dismissed.
+  // Outer wrapper is a motion.div so AnimatePresence in DashboardRowList can
+  // pick up the exit animation. The actual click target (Link/<a>/<button>)
+  // sits inside.
+  const motionProps = {
+    layout: true,
+    initial: { opacity: 0 },
+    animate: { opacity: 1 },
+    exit: { opacity: 0, height: 0 },
+    transition: { duration: 0.2, ease: "easeOut" as const },
+  };
+
+  let body: ReactNode;
   if (href) {
-    // Internal Wingman route — always use Next Link so prefetch + soft nav
-    // work, even in new-tab mode (Next Link supports the `target` prop).
-    // External URL (http/mailto/slack://etc) — use raw <a>.
     const isInternal = href.startsWith("/");
-    if (isInternal) {
-      return (
-        <Link
-          href={href}
-          target={external ? "_blank" : undefined}
-          rel={external ? "noopener noreferrer" : undefined}
-          className={wrapperClass}
-          onClick={onClick}
-        >
-          {inner}
-        </Link>
-      );
-    }
-    return (
+    body = isInternal ? (
+      <Link
+        href={href}
+        target={external ? "_blank" : undefined}
+        rel={external ? "noopener noreferrer" : undefined}
+        className={wrapperClass}
+        onClick={onClick}
+      >
+        {inner}
+      </Link>
+    ) : (
       <a
         href={href}
         target={external ? "_blank" : undefined}
@@ -187,14 +201,8 @@ export function DashboardRow({
         {inner}
       </a>
     );
-  }
-  if (onClick) {
-    // Use <div role="button"> instead of <button> here because the row
-    // contains a nested interactive (the 💬 affordance is a span with
-    // role="button"). A <button> inside a <button> is invalid HTML and
-    // breaks accessibility. <a> can host a role="button" child per a
-    // WHATWG carve-out, so the href branches above are unaffected.
-    return (
+  } else if (onClick) {
+    body = (
       <div
         role="button"
         tabIndex={0}
@@ -210,13 +218,27 @@ export function DashboardRow({
         {inner}
       </div>
     );
+  } else {
+    body = <div className={wrapperClass}>{inner}</div>;
   }
-  return <div className={wrapperClass}>{inner}</div>;
+  return <motion.div {...motionProps}>{body}</motion.div>;
 }
+
+export type ChipColor = "red" | "amber" | "green" | "grey";
+
+const CHIP_STYLE: Record<ChipColor, CSSProperties> = {
+  red: { backgroundColor: "var(--chip-red-bg)", color: "var(--chip-red-fg)" },
+  amber: { backgroundColor: "var(--chip-amber-bg)", color: "var(--chip-amber-fg)" },
+  green: { backgroundColor: "var(--chip-green-bg)", color: "var(--chip-green-fg)" },
+  grey: { backgroundColor: "var(--chip-grey-bg)", color: "var(--chip-grey-fg)" },
+};
 
 type DashboardSectionHeaderProps = {
   title: string;
   count?: string | null;
+  // Mega-commit A #16: color the count pill by urgency (e.g. decisions overdue
+  // = red, cadence amber). Omit to fall back to plain grey text.
+  chipColor?: ChipColor;
 };
 
 // Compact section header — 11px, weight 500, grey-tertiary, lowercase.
@@ -224,17 +246,26 @@ type DashboardSectionHeaderProps = {
 export function DashboardSectionHeader({
   title,
   count,
+  chipColor,
 }: DashboardSectionHeaderProps) {
   return (
     <div className="mb-1 flex items-center justify-between px-2">
       <h2 className="text-[11px] font-medium lowercase tracking-wide text-gray-400">
         {title}
       </h2>
-      {count && (
-        <span className="font-mono text-[11px] lowercase text-gray-400">
-          {count}
-        </span>
-      )}
+      {count &&
+        (chipColor ? (
+          <span
+            className="inline-block rounded-full px-2 py-0.5 font-mono text-[10px] lowercase"
+            style={CHIP_STYLE[chipColor]}
+          >
+            {count}
+          </span>
+        ) : (
+          <span className="font-mono text-[11px] lowercase text-gray-400">
+            {count}
+          </span>
+        ))}
     </div>
   );
 }
@@ -242,6 +273,9 @@ export function DashboardSectionHeader({
 type DashboardSectionProps = {
   children: ReactNode;
   className?: string;
+  // Mega-commit A #8: 4px colored left-border accent. Pass a CSS-var string
+  // (e.g. `"var(--accent-cadence)"`) or a raw hex. Omit for no accent.
+  accentColor?: string;
 };
 
 // Section wrapper — 10px (py-2.5) padding inside, 0.5px top border so
@@ -250,22 +284,47 @@ type DashboardSectionProps = {
 export function DashboardSection({
   children,
   className = "",
+  accentColor,
 }: DashboardSectionProps) {
+  const accentStyle: CSSProperties | undefined = accentColor
+    ? { borderLeftWidth: 4, borderLeftStyle: "solid", borderLeftColor: accentColor }
+    : undefined;
   return (
     <section
-      className={`max-w-4xl mx-auto border-t-[0.5px] border-gray-200 py-2.5 ${className}`}
+      className={`dash-section max-w-4xl mx-auto border-t-[0.5px] border-gray-200 py-2.5 ${className}`}
+      style={accentStyle}
     >
       {children}
     </section>
   );
 }
 
-// Container for stacked rows — 0.5px hairline divider between rows.
+// Container for stacked rows — 0.5px hairline divider between rows. Wrapped
+// in AnimatePresence so DashboardRow's exit animation runs when rows unmount.
 export function DashboardRowList({ children }: { children: ReactNode }) {
   return (
-    <div className="divide-y-[0.5px] divide-gray-100">{children}</div>
+    <div className="divide-y-[0.5px] divide-gray-100">
+      <AnimatePresence initial={false}>{children}</AnimatePresence>
+    </div>
   );
 }
+
+// ---------- Section accent palette (Mega-commit A #8) ----------
+
+// Map of section name → CSS-var accent color. Build C threads these into
+// DashboardSection's accentColor prop. Keep names in sync with the section
+// headers (`alerts`, `cadence`, `decisions`, `okrs`, `calendar`, `slack`,
+// `notion`, `email`).
+export const SECTION_ACCENTS: Record<string, string> = {
+  alerts: "var(--accent-alerts)",
+  cadence: "var(--accent-cadence)",
+  decisions: "var(--accent-decisions)",
+  okrs: "var(--accent-okrs)",
+  calendar: "var(--accent-calendar)",
+  slack: "var(--accent-slack)",
+  notion: "var(--accent-notion)",
+  email: "var(--accent-email)",
+};
 
 // ---------- Shared formatters ----------
 

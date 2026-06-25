@@ -16,11 +16,13 @@ import {
   useDecisions,
   type FeedbackSourceTable,
 } from "@/lib/supabase/hooks";
+import Link from "next/link";
 import {
   DashboardRow,
   DashboardRowList,
   DashboardSection,
   DashboardSectionHeader,
+  SECTION_ACCENTS,
   dotForPostmortemDue,
   formatPostmortemDays,
 } from "./_primitives";
@@ -42,13 +44,33 @@ export function DecisionsPostmortemDueView({
 }: DecisionsPostmortemDueViewProps = {}) {
   const { data: decisions, isLoading } = useDecisions("postmortem_due");
 
-  if (isLoading || !decisions || decisions.length === 0) return null;
+  if (isLoading) return null;
+  if (!decisions || decisions.length === 0) {
+    return (
+      <DashboardSection accentColor={SECTION_ACCENTS.decisions}>
+        <DashboardSectionHeader title="decisions" />
+        <p className="px-2 py-1 font-serif text-xs italic text-gray-500">
+          No decisions logged yet — capture your first one at{" "}
+          <Link href="/decisions" className="underline hover:text-gray-700">
+            /decisions
+          </Link>
+          .
+        </p>
+      </DashboardSection>
+    );
+  }
 
+  const anyOverdue = decisions.some(
+    (d) =>
+      d.postmortem_due_at !== null &&
+      new Date(d.postmortem_due_at).getTime() < Date.now(),
+  );
   return (
-    <DashboardSection>
+    <DashboardSection accentColor={SECTION_ACCENTS.decisions}>
       <DashboardSectionHeader
         title="decisions"
         count={`${decisions.length} due`}
+        chipColor={anyOverdue ? "red" : "amber"}
       />
       <DashboardRowList>
         {decisions.map((d) => {

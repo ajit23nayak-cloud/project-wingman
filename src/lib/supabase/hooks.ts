@@ -685,12 +685,24 @@ export function useEmail(emailId: string) {
   );
 }
 
-// Pinned shape from /api/emails/[id]/body: always returns { bodyText: string,
-// error?: string }. bodyText is non-null even on error (falls back to the
-// snippet). error code is one of: token_fetch_failed, no_google_token,
-// gmail_auth_failed, gmail_fetch_failed, email_not_found, lookup_failed.
+// Pinned shape from /api/emails/[id]/body. Mega-commit A widened this to
+// also return raw bodyHtml (for the sandboxed iframe renderer) plus the list
+// of attachment metadata. bodyText is non-null even on error (falls back to
+// the snippet); bodyHtml is "" on error or when Gmail returned no HTML part;
+// attachments is [] on error. error code is one of: token_fetch_failed,
+// no_google_token, gmail_auth_failed, gmail_fetch_failed, email_not_found,
+// lookup_failed.
+//
+// EmailAttachment is re-exported from src/lib/gmail.ts so this remains the
+// single source of truth — type-only re-export keeps it tree-shakable for
+// the client bundle (server-only is not referenced at runtime).
+export type { EmailAttachment } from "@/lib/gmail";
+import type { EmailAttachment as _EmailAttachment } from "@/lib/gmail";
+
 export type EmailBodyResponse = {
   bodyText: string;
+  bodyHtml: string;
+  attachments: _EmailAttachment[];
   error?: string;
 };
 
@@ -1365,6 +1377,7 @@ export type CreateDecisionBody = {
   decision?: string | null;
   reasoning?: string | null;
   premortem?: string | null;
+  postmortem_due_at?: string | null;
   tags?: string[] | null;
 };
 

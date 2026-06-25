@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveUser } from "@/lib/auth/resolveUser";
 import { makeSupabaseServerClient } from "@/lib/supabase/server";
 import { getGoogleAccessToken } from "@/lib/clerk";
-import { getMessageBody, GmailAuthError } from "@/lib/gmail";
+import {
+  getMessageBodyAndAttachments,
+  GmailAuthError,
+  type EmailAttachment,
+} from "@/lib/gmail";
 import {
   markGmailReauthNeeded,
   clearGmailReauthFlag,
@@ -79,13 +83,23 @@ export async function GET(
       message: emailErr.message,
     });
     return NextResponse.json(
-      { bodyText: "", error: "lookup_failed" },
+      {
+        bodyText: "",
+        bodyHtml: "",
+        attachments: [] as EmailAttachment[],
+        error: "lookup_failed",
+      },
       { status: 500 },
     );
   }
   if (!emailRow) {
     return NextResponse.json(
-      { bodyText: "", error: "email_not_found" },
+      {
+        bodyText: "",
+        bodyHtml: "",
+        attachments: [] as EmailAttachment[],
+        error: "email_not_found",
+      },
       { status: 404 },
     );
   }
@@ -101,6 +115,8 @@ export async function GET(
     await markGmailReauthNeeded(supabase, supabaseUserId);
     return NextResponse.json({
       bodyText: emailRow.snippet ?? "",
+      bodyHtml: "",
+      attachments: [] as EmailAttachment[],
       error: "token_fetch_failed",
     });
   }
@@ -108,15 +124,15 @@ export async function GET(
     await markGmailReauthNeeded(supabase, supabaseUserId);
     return NextResponse.json({
       bodyText: emailRow.snippet ?? "",
+      bodyHtml: "",
+      attachments: [] as EmailAttachment[],
       error: "no_google_token",
     });
   }
 
   try {
-    const { bodyText, bodyHtml } = await getMessageBody(
-      token,
-      emailRow.gmail_message_id,
-    );
+    const { bodyText, bodyHtml, attachments } =
+      await getMessageBodyAndAttachments(token, emailRow.gmail_message_id);
     const text =
       bodyText && bodyText.trim().length > 0
         ? bodyText
@@ -126,7 +142,11 @@ export async function GET(
     // Gmail call succeeded — OAuth is healthy. Self-clear the reauth flag
     // (strategy ii for out-of-band reconnects).
     await clearGmailReauthFlag(supabase, supabaseUserId);
-    return NextResponse.json({ bodyText: text });
+    return NextResponse.json({
+      bodyText: text,
+      bodyHtml: bodyHtml ?? "",
+      attachments,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[emails/body] Gmail fetch failed", {
@@ -137,11 +157,15 @@ export async function GET(
       await markGmailReauthNeeded(supabase, supabaseUserId);
       return NextResponse.json({
         bodyText: emailRow.snippet ?? "",
+        bodyHtml: "",
+        attachments: [] as EmailAttachment[],
         error: "gmail_auth_failed",
       });
     }
     return NextResponse.json({
       bodyText: emailRow.snippet ?? "",
+      bodyHtml: "",
+      attachments: [] as EmailAttachment[],
       error: "gmail_fetch_failed",
     });
   }

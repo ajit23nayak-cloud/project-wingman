@@ -27,6 +27,7 @@ import {
   DashboardRowList,
   DashboardSection,
   DashboardSectionHeader,
+  SECTION_ACCENTS,
   dotForPrepPriority,
   formatClock24,
 } from "./_primitives";
@@ -130,10 +131,11 @@ export function CalendarTodayView({
   const timedToday = upcoming.filter((ev) => !ev.all_day);
 
   return (
-    <DashboardSection>
+    <DashboardSection accentColor={SECTION_ACCENTS.calendar}>
       <DashboardSectionHeader
         title="calendar"
         count={`${timedToday.length} today`}
+        chipColor="grey"
       />
       {allDayToday.length > 0 && (
         <div className="mx-2 mb-1 rounded border-[0.5px] border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
@@ -142,7 +144,7 @@ export function CalendarTodayView({
         </div>
       )}
       {timedToday.length === 0 && allDayToday.length === 0 && (
-        <p className="px-2 py-1 text-xs text-gray-500">
+        <p className="px-2 py-1 font-serif text-xs italic text-gray-500">
           No more meetings today. Enjoy the space.
         </p>
       )}

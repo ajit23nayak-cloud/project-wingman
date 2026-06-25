@@ -51,6 +51,17 @@ export type SentMessage = {
   bodyText: string;
 };
 
+// Metadata for an attachment surfaced from a Gmail message. attachmentId is
+// the opaque id Gmail uses for the subsequent attachments.get call; we don't
+// download bytes here — surface metadata only so the UI can render a download
+// link, and stream bytes on demand via /api/emails/[id]/attachments/[aid].
+export type EmailAttachment = {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
 // Per-request Gmail client. The googleapis OAuth2 client holds a token —
 // can't safely hoist to module scope (would leak across users in a warm
 // Lambda). The construction cost is sub-millisecond, so per-request is fine.
@@ -85,6 +96,36 @@ function extractBodies(payload: gmail_v1.Schema$MessagePart | undefined): {
   }
   walk(payload);
   return { bodyText, bodyHtml };
+}
+
+// Walk the same MessagePart tree as extractBodies and collect any leaf parts
+// that look like a real attachment (has both an attachmentId AND a filename).
+// Gmail uses attachmentId for inline embedded resources too — those usually
+// have an empty filename — and we deliberately filter those out so the UI
+// doesn't surface inline images as "files to download."
+function extractAttachments(
+  payload: gmail_v1.Schema$MessagePart | undefined,
+): EmailAttachment[] {
+  const out: EmailAttachment[] = [];
+  function walk(part: gmail_v1.Schema$MessagePart | undefined): void {
+    if (!part) return;
+    const attachmentId = part.body?.attachmentId;
+    const filename = part.filename ?? "";
+    if (attachmentId && filename.length > 0) {
+      out.push({
+        attachmentId,
+        filename,
+        mimeType: part.mimeType ?? "application/octet-stream",
+        sizeBytes:
+          typeof part.body?.size === "number" ? part.body.size : 0,
+      });
+    }
+    if (part.parts) {
+      for (const child of part.parts) walk(child);
+    }
+  }
+  walk(payload);
+  return out;
 }
 
 function getHeader(
@@ -482,6 +523,61 @@ export async function getMessageBody(
       format: "full",
     });
     return extractBodies(res.data.payload);
+  } catch (err) {
+    if (isGmailAuthError(err)) throw new GmailAuthError();
+    throw err;
+  }
+}
+
+// Superset of getMessageBody: returns the same bodyText/bodyHtml AND a list of
+// attachment metadata. Kept as a separate function instead of widening
+// getMessageBody so existing callers (draft generator, etc.) don't pay for the
+// extra walk + don't need to update their types.
+export async function getMessageBodyAndAttachments(
+  accessToken: string,
+  gmailMessageId: string,
+): Promise<{
+  bodyText: string;
+  bodyHtml: string;
+  attachments: EmailAttachment[];
+}> {
+  const gmail = getGmailClient(accessToken);
+  try {
+    const res = await gmail.users.messages.get({
+      userId: "me",
+      id: gmailMessageId,
+      format: "full",
+    });
+    const { bodyText, bodyHtml } = extractBodies(res.data.payload);
+    const attachments = extractAttachments(res.data.payload);
+    return { bodyText, bodyHtml, attachments };
+  } catch (err) {
+    if (isGmailAuthError(err)) throw new GmailAuthError();
+    throw err;
+  }
+}
+
+// Download a single attachment's bytes by id. Gmail returns the payload as a
+// base64url-encoded string on { data }; we decode to a Buffer so the caller
+// (the streaming route) can return it directly without re-encoding. mimeType
+// isn't returned by attachments.get — the caller has to thread it in from the
+// parent message's part metadata. We surface it as undefined here so the
+// caller can fall back to application/octet-stream if needed.
+export async function downloadAttachment(
+  accessToken: string,
+  gmailMessageId: string,
+  attachmentId: string,
+): Promise<{ data: Buffer; mimeType?: string }> {
+  const gmail = getGmailClient(accessToken);
+  try {
+    const res = await gmail.users.messages.attachments.get({
+      userId: "me",
+      messageId: gmailMessageId,
+      id: attachmentId,
+    });
+    const raw = res.data.data ?? "";
+    const buf = Buffer.from(raw, "base64url");
+    return { data: buf };
   } catch (err) {
     if (isGmailAuthError(err)) throw new GmailAuthError();
     throw err;
