@@ -36,6 +36,8 @@ import {
 } from "./_primitives";
 import { EmailSlidePanel } from "@/components/dashboard/EmailSlidePanel";
 import { EngagementStreakBadge } from "@/components/dashboard/EngagementStreakBadge";
+import { TodaysSignalHero } from "@/components/TodaysSignalHero";
+import { EveningReflectionBanner } from "@/components/EveningReflectionBanner";
 import {
   useMe,
   useCounts,
@@ -44,6 +46,7 @@ import {
   useDraftCount,
   useStreak,
   useSnooze,
+  useShouldShowEveningBanner,
   useNudges,
   useEscalationCount7d,
   useSlackWorkspace,
@@ -166,6 +169,7 @@ function DashboardViewInner() {
   }, [isLoaded, isSignedIn, router]);
 
   const snooze = useSnooze();
+  const showEveningBanner = useShouldShowEveningBanner();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [openEmailId, setOpenEmailId] = useState<string | null>(null);
@@ -468,6 +472,16 @@ function DashboardViewInner() {
           </Link>
         </div>
       )}
+
+      {/* Commit 18: Today's Signal hero — full-width cream card with the
+          latest cron-generated one-sentence summary. Falls back to a
+          quiet placeholder when no fresh signal exists. */}
+      <TodaysSignalHero />
+
+      {/* Commit 18: Evening reflection banner — only renders at user's
+          local 21:00-23:00 if no reflection submitted for today. The
+          useShouldShowEveningBanner hook handles the gate. */}
+      {showEveningBanner && <EveningReflectionBanner />}
 
       {/* Welcome (Commit 15): Cred + Newspaper treatment. Greeting body
           lowercase per hybrid rule, founder name keeps original casing.

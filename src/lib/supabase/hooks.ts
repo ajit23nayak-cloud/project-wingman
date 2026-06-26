@@ -41,6 +41,9 @@ export type MeData = {
   mhStorageTier: 1 | 2 | 3 | 4;
   mhAssessmentSkippedAt: string | null;
   mhAssessmentSkipCount: number;
+  // Commit 18: IANA tz string for client-side evening-banner gating + future
+  // user-local cron filters. Defaults to 'Asia/Kolkata' per migration 0025.
+  timezone: string;
 };
 
 export function useMe() {
@@ -1945,4 +1948,115 @@ export function useDisconnectNotion() {
       };
     }
   };
+}
+
+// ---------- Today's Signal (Commit 18) ------------------------------------
+
+export type TodaysSignalRow = {
+  summary_text: string;
+  generated_at: string;
+  source_counts: Record<string, number> | null;
+};
+
+// Reads the latest dashboard_signals row for the current user via RLS
+// select_own (migration 0025). Returns the row directly OR null if
+// nothing's been generated yet. Cron route writes via service_role.
+export function useTodaysSignal() {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<TodaysSignalRow | null>(
+    me ? ["dashboard_signal", me.supabaseUserId] : null,
+    async () => {
+      const { data, error } = await supabase
+        .from("dashboard_signals")
+        .select("summary_text, generated_at, source_counts")
+        .order("generated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (data as TodaysSignalRow | null) ?? null;
+    },
+  );
+}
+
+// ---------- Daily reflection (Commit 18) ----------------------------------
+
+export type DailyReflectionRow = {
+  reflection_date: string;
+  good_today: string | null;
+  carry_tomorrow: string | null;
+};
+
+export function useDailyReflectionToday() {
+  const supabase = useSupabaseBrowser();
+  const { data: me } = useMe();
+  return useSWR<DailyReflectionRow | null>(
+    me ? ["daily_reflection_today", me.supabaseUserId] : null,
+    async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from("daily_reflections")
+        .select("reflection_date, good_today, carry_tomorrow")
+        .eq("reflection_date", today)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (data as DailyReflectionRow | null) ?? null;
+    },
+  );
+}
+
+export function useSubmitReflection() {
+  const { mutate } = useSWRConfig();
+  return async (args: {
+    tone: "rough" | "steady" | "great" | null;
+    free_text: string | null;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/reflection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error ?? `reflection_${res.status}` };
+      }
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "daily_reflection_today",
+      );
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+// Derived: should we show the evening-reflection banner right now?
+// Returns true when ALL of:
+//   - me loaded with timezone
+//   - user's local hour is in [21, 23)
+//   - no reflection row for today
+// Pure client-side; cron observes but doesn't drive.
+export function useShouldShowEveningBanner(): boolean {
+  const { data: me } = useMe();
+  const { data: reflection } = useDailyReflectionToday();
+  if (!me) return false;
+  if (reflection) return false;
+  const tz = me.timezone ?? "Asia/Kolkata";
+  try {
+    const localHour = parseInt(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hour: "2-digit",
+        hour12: false,
+      }).format(new Date()),
+      10,
+    );
+    return localHour >= 21 && localHour < 23;
+  } catch {
+    return false;
+  }
 }

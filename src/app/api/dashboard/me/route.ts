@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
   const { data: row, error } = await supabase
     .from("users")
     .select(
-      "last_ingested_at, gmail_reauth_needed, gmail_reauth_needed_at, mh_style, mh_storage_tier, mh_assessment_skipped_at, mh_assessment_skip_count",
+      "last_ingested_at, gmail_reauth_needed, gmail_reauth_needed_at, mh_style, mh_storage_tier, mh_assessment_skipped_at, mh_assessment_skip_count, timezone",
     )
     .eq("id", supabaseUserId)
     .single();
@@ -47,5 +47,6 @@ export async function GET(req: NextRequest) {
     mhStorageTier: row?.mh_storage_tier ?? 2,
     mhAssessmentSkippedAt: row?.mh_assessment_skipped_at ?? null,
     mhAssessmentSkipCount: row?.mh_assessment_skip_count ?? 0,
+    timezone: row?.timezone ?? "Asia/Kolkata",
   });
 }
