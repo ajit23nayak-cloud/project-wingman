@@ -1880,3 +1880,69 @@ export function useIncrementEngagementStreak() {
     }
   };
 }
+
+// ---------- Slack + Notion disconnect (Commit 16) ---------------------------
+
+// Mirrors useDisconnectCalendar at line 610. POST to the disconnect route;
+// on success invalidate the workspace key AND the slack_messages list keys
+// so dashboard + settings both flip to the disconnected state without a
+// manual refresh.
+export function useDisconnectSlack() {
+  const { mutate } = useSWRConfig();
+  return async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/slack/oauth/disconnect", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        return {
+          ok: false,
+          error: data.error ?? `slack_disconnect_${res.status}`,
+        };
+      }
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "slack_workspace",
+      );
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "slack_messages",
+      );
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+export function useDisconnectNotion() {
+  const { mutate } = useSWRConfig();
+  return async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/notion/oauth/disconnect", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        return {
+          ok: false,
+          error: data.error ?? `notion_disconnect_${res.status}`,
+        };
+      }
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "notion_integration",
+      );
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "notion_pages",
+      );
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}

@@ -25,6 +25,8 @@ import {
   useNotionIntegration,
   useCalendarCredentials,
   useDisconnectCalendar,
+  useDisconnectSlack,
+  useDisconnectNotion,
   useStorageTierPreview,
   useUpdateStorageTier,
   type StorageTierPreview,
@@ -584,29 +586,48 @@ function SlackIcon({ className = "h-5 w-5" }: { className?: string }) {
 
 function SlackIntegrationCard() {
   const { data: workspace, isLoading } = useSlackWorkspace();
+  const disconnect = useDisconnectSlack();
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const handleDisconnect = async () => {
+    const teamLabel = workspace?.team_name ?? workspace?.team_id ?? "this workspace";
+    if (
+      !window.confirm(
+        `Disconnect Slack — ${teamLabel}? This will stop syncing until you reconnect. You can reconnect anytime (and pick a different workspace).`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setLocalError(null);
+    const res = await disconnect();
+    setBusy(false);
+    if (!res.ok) setLocalError(res.error ?? "disconnect_failed");
+  };
 
   if (isLoading) {
-    return <p className="text-sm text-gray-500">Loading…</p>;
+    return <p className="cred-ui-lower text-[13px] text-[var(--cred-text-meta)]">loading…</p>;
   }
 
   // Not connected.
   if (!workspace) {
     return (
-      <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+      <div className="flex items-start justify-between gap-4 rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
         <div className="flex items-start gap-3">
           <SlackIcon className="mt-0.5 h-6 w-6" />
           <div>
-            <div className="text-sm font-semibold text-gray-900">Slack</div>
-            <p className="mt-1 text-sm text-gray-600">
+            <div className="text-[14px] font-medium text-[var(--cred-text-primary)]">Slack</div>
+            <p className="mt-1 text-[13px] text-[var(--cred-text-secondary)]">
               Connect a Slack workspace to ingest DMs alongside email.
             </p>
           </div>
         </div>
         <a
           href="/api/slack/oauth/start"
-          className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+          className="cred-ui-lower shrink-0 rounded-[4px] bg-[var(--cred-text-primary)] px-4 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-card-bg)] hover:opacity-90"
         >
-          Connect Slack
+          connect slack
         </a>
       </div>
     );
@@ -615,23 +636,29 @@ function SlackIntegrationCard() {
   // Connected — disconnected token (revoked / expired).
   if (workspace.status === "disconnected") {
     return (
-      <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+      <div className="flex items-start justify-between gap-4 rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
         <div className="flex items-start gap-3">
           <SlackIcon className="mt-0.5 h-6 w-6" />
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-900">
+              <span className="text-[14px] font-medium text-[var(--cred-text-primary)]">
                 Slack — {workspace.team_name ?? workspace.team_id}
               </span>
-              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">
-                Disconnected
+              <span
+                className="cred-ui-lower rounded-[3px] px-2 py-0.5 text-[11px] tracking-[0.02em]"
+                style={{
+                  backgroundColor: "var(--chip-red-bg)",
+                  color: "var(--chip-red-fg)",
+                }}
+              >
+                disconnected
               </span>
             </div>
-            <p className="mt-1 text-sm text-gray-600">
+            <p className="mt-1 text-[13px] text-[var(--cred-text-secondary)]">
               Slack token expired or revoked.
             </p>
             {workspace.disconnected_at && (
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-[12px] text-[var(--cred-text-meta)]">
                 Disconnected {formatRelative(workspace.disconnected_at)}
               </p>
             )}
@@ -639,9 +666,9 @@ function SlackIntegrationCard() {
         </div>
         <a
           href="/api/slack/oauth/start"
-          className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+          className="cred-ui-lower shrink-0 rounded-[4px] bg-[var(--cred-text-primary)] px-4 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-card-bg)] hover:opacity-90"
         >
-          Reconnect Slack
+          reconnect slack
         </a>
       </div>
     );
@@ -649,28 +676,45 @@ function SlackIntegrationCard() {
 
   // Connected + active.
   return (
-    <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+    <div className="flex items-start justify-between gap-4 rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
       <div className="flex items-start gap-3">
         <SlackIcon className="mt-0.5 h-6 w-6" />
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-gray-900">
+            <span className="text-[14px] font-medium text-[var(--cred-text-primary)]">
               Slack — {workspace.team_name ?? workspace.team_id}
             </span>
-            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800">
-              Connected
+            <span
+              className="cred-ui-lower rounded-[3px] px-2 py-0.5 text-[11px] tracking-[0.02em]"
+              style={{
+                backgroundColor: "var(--chip-green-bg)",
+                color: "var(--chip-green-fg)",
+              }}
+            >
+              connected
             </span>
           </div>
-          <p className="mt-1 text-xs text-gray-600">
+          <p className="mt-1 text-[12px] text-[var(--cred-text-secondary)]">
             Connected {formatRelative(workspace.connected_at)}
           </p>
           {workspace.last_polled_at && (
-            <p className="mt-0.5 text-xs text-gray-500">
+            <p className="mt-0.5 text-[12px] text-[var(--cred-text-meta)]">
               Last sync: {formatRelative(workspace.last_polled_at)}
             </p>
           )}
+          {localError && (
+            <p className="mt-1 text-[12px] text-[var(--chip-red-fg)]">{localError}</p>
+          )}
         </div>
       </div>
+      <button
+        type="button"
+        onClick={handleDisconnect}
+        disabled={busy}
+        className="cred-ui-lower shrink-0 text-[12px] text-[var(--cred-text-secondary)] underline hover:text-[var(--cred-text-primary)] disabled:opacity-50"
+      >
+        {busy ? "disconnecting…" : "disconnect"}
+      </button>
     </div>
   );
 }
@@ -695,20 +739,42 @@ function NotionIcon({ className = "h-5 w-5" }: { className?: string }) {
 
 function NotionIntegrationCard() {
   const { data: integration, isLoading } = useNotionIntegration();
+  const disconnect = useDisconnectNotion();
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const handleDisconnect = async () => {
+    const wsLabel =
+      integration?.workspace_name ??
+      integration?.workspace_id ??
+      "this workspace";
+    if (
+      !window.confirm(
+        `Disconnect Notion — ${wsLabel}? This will stop syncing until you reconnect. You can reconnect anytime (and pick a different workspace).`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setLocalError(null);
+    const res = await disconnect();
+    setBusy(false);
+    if (!res.ok) setLocalError(res.error ?? "disconnect_failed");
+  };
 
   if (isLoading) {
-    return <p className="text-sm text-gray-500">Loading…</p>;
+    return <p className="cred-ui-lower text-[13px] text-[var(--cred-text-meta)]">loading…</p>;
   }
 
   // Not connected.
   if (!integration) {
     return (
-      <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+      <div className="flex items-start justify-between gap-4 rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
         <div className="flex items-start gap-3">
           <NotionIcon className="mt-0.5 h-6 w-6" />
           <div>
-            <div className="text-sm font-semibold text-gray-900">Notion</div>
-            <p className="mt-1 text-sm text-gray-600">
+            <div className="text-[14px] font-medium text-[var(--cred-text-primary)]">Notion</div>
+            <p className="mt-1 text-[13px] text-[var(--cred-text-secondary)]">
               Connect a Notion workspace so Wingman classifies recent page
               edits alongside email.
             </p>
@@ -716,9 +782,9 @@ function NotionIntegrationCard() {
         </div>
         <a
           href="/api/notion/oauth/start"
-          className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+          className="cred-ui-lower shrink-0 rounded-[4px] bg-[var(--cred-text-primary)] px-4 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-card-bg)] hover:opacity-90"
         >
-          Connect Notion
+          connect notion
         </a>
       </div>
     );
@@ -727,23 +793,29 @@ function NotionIntegrationCard() {
   // Connected — disconnected token (revoked / expired).
   if (integration.status === "disconnected") {
     return (
-      <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+      <div className="flex items-start justify-between gap-4 rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
         <div className="flex items-start gap-3">
           <NotionIcon className="mt-0.5 h-6 w-6" />
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-900">
+              <span className="text-[14px] font-medium text-[var(--cred-text-primary)]">
                 Notion — {integration.workspace_name ?? integration.workspace_id}
               </span>
-              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">
-                Disconnected
+              <span
+                className="cred-ui-lower rounded-[3px] px-2 py-0.5 text-[11px] tracking-[0.02em]"
+                style={{
+                  backgroundColor: "var(--chip-red-bg)",
+                  color: "var(--chip-red-fg)",
+                }}
+              >
+                disconnected
               </span>
             </div>
-            <p className="mt-1 text-sm text-gray-600">
+            <p className="mt-1 text-[13px] text-[var(--cred-text-secondary)]">
               Notion token expired or revoked.
             </p>
             {integration.disconnected_at && (
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-[12px] text-[var(--cred-text-meta)]">
                 Disconnected {formatRelative(integration.disconnected_at)}
               </p>
             )}
@@ -751,9 +823,9 @@ function NotionIntegrationCard() {
         </div>
         <a
           href="/api/notion/oauth/start"
-          className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+          className="cred-ui-lower shrink-0 rounded-[4px] bg-[var(--cred-text-primary)] px-4 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-card-bg)] hover:opacity-90"
         >
-          Reconnect Notion
+          reconnect notion
         </a>
       </div>
     );
@@ -761,28 +833,45 @@ function NotionIntegrationCard() {
 
   // Connected + active.
   return (
-    <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4">
+    <div className="flex items-start justify-between gap-4 rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
       <div className="flex items-start gap-3">
         <NotionIcon className="mt-0.5 h-6 w-6" />
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-gray-900">
+            <span className="text-[14px] font-medium text-[var(--cred-text-primary)]">
               Notion — {integration.workspace_name ?? integration.workspace_id}
             </span>
-            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800">
-              Connected
+            <span
+              className="cred-ui-lower rounded-[3px] px-2 py-0.5 text-[11px] tracking-[0.02em]"
+              style={{
+                backgroundColor: "var(--chip-green-bg)",
+                color: "var(--chip-green-fg)",
+              }}
+            >
+              connected
             </span>
           </div>
-          <p className="mt-1 text-xs text-gray-600">
+          <p className="mt-1 text-[12px] text-[var(--cred-text-secondary)]">
             Connected {formatRelative(integration.connected_at)}
           </p>
           {integration.last_polled_at && (
-            <p className="mt-0.5 text-xs text-gray-500">
+            <p className="mt-0.5 text-[12px] text-[var(--cred-text-meta)]">
               Last sync: {formatRelative(integration.last_polled_at)}
             </p>
           )}
+          {localError && (
+            <p className="mt-1 text-[12px] text-[var(--chip-red-fg)]">{localError}</p>
+          )}
         </div>
       </div>
+      <button
+        type="button"
+        onClick={handleDisconnect}
+        disabled={busy}
+        className="cred-ui-lower shrink-0 text-[12px] text-[var(--cred-text-secondary)] underline hover:text-[var(--cred-text-primary)] disabled:opacity-50"
+      >
+        {busy ? "disconnecting…" : "disconnect"}
+      </button>
     </div>
   );
 }
@@ -851,10 +940,17 @@ function CalendarIntegrationCard() {
   const [localError, setLocalError] = useState<string | null>(null);
 
   if (isLoading) {
-    return <p className="text-sm text-gray-500">Loading…</p>;
+    return <p className="cred-ui-lower text-[13px] text-[var(--cred-text-meta)]">loading…</p>;
   }
 
   const handleDisconnect = async () => {
+    if (
+      !window.confirm(
+        "Disconnect Google Calendar? This will stop syncing meetings until you reconnect.",
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     setLocalError(null);
     const res = await disconnect();
@@ -865,15 +961,15 @@ function CalendarIntegrationCard() {
   // Not connected (no row at all).
   if (!credentials) {
     return (
-      <div className="rounded-lg border border-gray-200 p-4">
+      <div className="rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <CalendarIcon className="mt-0.5 h-6 w-6 text-gray-700" />
+            <CalendarIcon className="mt-0.5 h-6 w-6 text-[var(--cred-text-secondary)]" />
             <div>
-              <div className="text-sm font-semibold text-gray-900">
+              <div className="text-[14px] font-medium text-[var(--cred-text-primary)]">
                 Google Calendar
               </div>
-              <p className="mt-1 text-sm text-gray-600">
+              <p className="mt-1 text-[13px] text-[var(--cred-text-secondary)]">
                 Connect Google Calendar to see today&apos;s meetings and get
                 prep priorities surfaced.
               </p>
@@ -881,9 +977,9 @@ function CalendarIntegrationCard() {
           </div>
           <a
             href="/api/google/calendar/oauth/start"
-            className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+            className="cred-ui-lower shrink-0 rounded-[4px] bg-[var(--cred-text-primary)] px-4 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-card-bg)] hover:opacity-90"
           >
-            Connect Calendar
+            connect calendar
           </a>
         </div>
         <OutlookInteropNote />
@@ -894,24 +990,30 @@ function CalendarIntegrationCard() {
   // Disconnected (row exists, status=disconnected).
   if (credentials.status === "disconnected") {
     return (
-      <div className="rounded-lg border border-gray-200 p-4">
+      <div className="rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <CalendarIcon className="mt-0.5 h-6 w-6 text-gray-700" />
+            <CalendarIcon className="mt-0.5 h-6 w-6 text-[var(--cred-text-secondary)]" />
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-gray-900">
+                <span className="text-[14px] font-medium text-[var(--cred-text-primary)]">
                   Google Calendar
                 </span>
-                <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">
-                  Disconnected
+                <span
+                  className="cred-ui-lower rounded-[3px] px-2 py-0.5 text-[11px] tracking-[0.02em]"
+                  style={{
+                    backgroundColor: "var(--chip-red-bg)",
+                    color: "var(--chip-red-fg)",
+                  }}
+                >
+                  disconnected
                 </span>
               </div>
-              <p className="mt-1 text-sm text-gray-600">
+              <p className="mt-1 text-[13px] text-[var(--cred-text-secondary)]">
                 Calendar token expired or revoked.
               </p>
               {credentials.disconnected_at && (
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-1 text-[12px] text-[var(--cred-text-meta)]">
                   Disconnected {formatRelative(credentials.disconnected_at)}
                 </p>
               )}
@@ -919,9 +1021,9 @@ function CalendarIntegrationCard() {
           </div>
           <a
             href="/api/google/calendar/oauth/start"
-            className="shrink-0 rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+            className="cred-ui-lower shrink-0 rounded-[4px] bg-[var(--cred-text-primary)] px-4 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-card-bg)] hover:opacity-90"
           >
-            Reconnect Calendar
+            reconnect calendar
           </a>
         </div>
         <OutlookInteropNote />
@@ -931,27 +1033,33 @@ function CalendarIntegrationCard() {
 
   // Connected + active.
   return (
-    <div className="rounded-lg border border-gray-200 p-4">
+    <div className="rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-3">
-          <CalendarIcon className="mt-0.5 h-6 w-6 text-gray-700" />
+          <CalendarIcon className="mt-0.5 h-6 w-6 text-[var(--cred-text-secondary)]" />
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-900">
+              <span className="text-[14px] font-medium text-[var(--cred-text-primary)]">
                 Google Calendar
               </span>
-              <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800">
-                Connected
+              <span
+                className="cred-ui-lower rounded-[3px] px-2 py-0.5 text-[11px] tracking-[0.02em]"
+                style={{
+                  backgroundColor: "var(--chip-green-bg)",
+                  color: "var(--chip-green-fg)",
+                }}
+              >
+                connected
               </span>
             </div>
-            <p className="mt-1 text-xs text-gray-600">
+            <p className="mt-1 text-[12px] text-[var(--cred-text-secondary)]">
               Connected {formatRelative(credentials.connected_at)}
             </p>
-            <p className="mt-0.5 text-xs text-gray-500">
+            <p className="mt-0.5 text-[12px] text-[var(--cred-text-meta)]">
               Last sync: {formatRelative(credentials.updated_at)}
             </p>
             {localError && (
-              <p className="mt-1 text-xs text-red-600">{localError}</p>
+              <p className="mt-1 text-[12px] text-[var(--chip-red-fg)]">{localError}</p>
             )}
           </div>
         </div>
@@ -959,9 +1067,9 @@ function CalendarIntegrationCard() {
           type="button"
           onClick={handleDisconnect}
           disabled={busy}
-          className="shrink-0 text-xs text-gray-600 underline hover:text-gray-900 disabled:opacity-50"
+          className="cred-ui-lower shrink-0 text-[12px] text-[var(--cred-text-secondary)] underline hover:text-[var(--cred-text-primary)] disabled:opacity-50"
         >
-          {busy ? "Disconnecting…" : "Disconnect"}
+          {busy ? "disconnecting…" : "disconnect"}
         </button>
       </div>
       <OutlookInteropNote />
