@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUser, UserButton } from "@clerk/nextjs";
+import { SWRConfig } from "swr";
 import { HelpMeThinkModal } from "@/app/_components/HelpMeThinkModal";
 import { CalendarTodayView } from "./CalendarTodayView";
 import { CadenceFlagsView } from "./CadenceFlagsView";
@@ -131,7 +132,34 @@ const ERROR_MESSAGES: Record<string, string> = {
     "Gmail is temporarily unavailable. Please try refreshing.",
 };
 
+// Commit 14 Bug 1 fix: wrap the dashboard in an SWRConfig that turns off
+// focus-triggered revalidation (the primary cause of the "section flicker"
+// Ajit reported on 2026-06-26 — moving the mouse to another window and back
+// fired N parallel refetches across the 7 sections), keeps previous data
+// during background refetches (no skeleton flash), and dedupes burst
+// revalidations within a 60s window. Scope is the dashboard only — other
+// surfaces (e.g. /settings, /email/[id]) keep SWR defaults.
+//
+// Per Tab 2's retrospective rule proposal (log line 6680): "For any new
+// dashboard section with SWR-backed data, the spec must explicitly set
+// `refreshInterval` (default 0 = manual) + `keepPreviousData: true` +
+// `revalidateOnFocus: false`." Wrapping at the page boundary is the
+// minimum-blast-radius way to apply that rule retroactively.
 export function DashboardView() {
+  return (
+    <SWRConfig
+      value={{
+        revalidateOnFocus: false,
+        keepPreviousData: true,
+        dedupingInterval: 60000,
+      }}
+    >
+      <DashboardViewInner />
+    </SWRConfig>
+  );
+}
+
+function DashboardViewInner() {
   const router = useRouter();
   const { user: clerkUser, isLoaded, isSignedIn } = useUser();
   useEffect(() => {
@@ -216,6 +244,11 @@ export function DashboardView() {
   const [isIngesting, setIsIngesting] = useState(false);
   const [firstIngestCount, setFirstIngestCount] = useState<number | null>(null);
   const [ingestError, setIngestError] = useState<string | null>(null);
+  // Commit 14 Bug 4: visible feedback for manual refresh. The handler is
+  // wired correctly (and was wired correctly before this commit too); the
+  // perceived "nothing happens" was a no-toast / sub-second-spinner UX bug.
+  // refreshToast stays visible for 3s after a successful manual sync.
+  const [refreshToast, setRefreshToast] = useState<string | null>(null);
   const autoTriggeredRef = useRef(false);
 
   // Onboarding banner state — show if user has generated 0 drafts AND
@@ -270,12 +303,34 @@ export function DashboardView() {
   const runIngest = async (isAuto: boolean) => {
     setIsIngesting(true);
     setIngestError(null);
+    setRefreshToast(null);
+    // Minimum visible spinner duration so manual clicks always feel like
+    // something happened. Tied to Commit 14 Bug 4: when there are no new
+    // emails to fetch the sync returns in ~200ms and the user sees nothing.
+    const startedAt = Date.now();
+    const MIN_VISIBLE_MS = 600;
     try {
       const res = await triggerIngest();
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < MIN_VISIBLE_MS) {
+        await new Promise((r) => setTimeout(r, MIN_VISIBLE_MS - elapsed));
+      }
       if (!res.ok && res.error) {
         setIngestError(ERROR_MESSAGES[res.error] ?? `Error: ${res.error}`);
-      } else if (res.ok && isAuto) {
-        setFirstIngestCount(res.ingested ?? 0);
+      } else if (res.ok) {
+        if (isAuto) {
+          setFirstIngestCount(res.ingested ?? 0);
+        } else {
+          // Manual refresh — show a toast so the user knows it worked even
+          // when zero new emails arrived.
+          const n = res.ingested ?? 0;
+          setRefreshToast(
+            n > 0
+              ? `Synced — ${n} new email${n === 1 ? "" : "s"}.`
+              : "Already up to date.",
+          );
+          window.setTimeout(() => setRefreshToast(null), 3000);
+        }
       }
     } catch (err) {
       setIngestError(
@@ -455,26 +510,39 @@ export function DashboardView() {
           <p className="mt-3 text-sm text-red-600">Could not load. Refresh.</p>
         )}
 
+        {refreshToast && (
+          <p className="mt-3 text-sm text-green-700">{refreshToast}</p>
+        )}
+
+        {/* Commit 14 Bug 2: stat card typography pulled into the dashboard
+            scale. Was text-[11px] uppercase label + text-lg semibold value
+            (off-scale, looked like a footnote). Now uses the same 13.5px
+            row-body weight as the rest of the dashboard. */}
         <div className="mt-4 grid grid-cols-2 gap-3 max-w-md">
           <div className="rounded-lg border border-gray-200 p-3">
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">
+            <div className="text-[13px] font-medium text-gray-500">
               Emails ingested
             </div>
-            <div className="text-lg font-semibold mt-0.5">
+            <div className="mt-1 text-lg font-medium text-gray-900">
               {counts?.total ?? "—"}
             </div>
           </div>
           <div className="rounded-lg border border-gray-200 p-3">
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">
+            <div className="text-[13px] font-medium text-gray-500">
               Last sync
             </div>
-            <div className="text-lg font-semibold mt-0.5">
+            <div className="mt-1 text-lg font-medium text-gray-900">
               {formatRelativeTime(me?.lastIngestedAt)}
             </div>
           </div>
         </div>
 
-        <div className="mt-4">
+        {/* Commit 14 Bug 3: add explicit bottom spacing so the welcome
+            section visually closes before the next dashboard section starts.
+            Was mt-4 with no mb-* on the wrapper, so Classify-all bumped
+            straight into the alerts section. mb-8 matches the typical
+            section-gap in the row-pattern grid. */}
+        <div className="mt-4 mb-8">
           <button
             disabled
             title="Available next session"
