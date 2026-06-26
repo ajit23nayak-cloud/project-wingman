@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 :root {
+  /* Legacy tokens kept for landing page / non-dashboard surfaces. The
+     dashboard now uses the Cred + Newspaper palette below (Commit 15). */
   --bg-light: #fafaf7;
   --bg-dark: #0d0d0e;
   --bg-cream: #f4f1ea;
@@ -14,10 +16,50 @@
   --border-light: #e0ddd6;
   --border-dark: #1f1f21;
   --surface: #ffffff;
-  --background: var(--bg-light);
   --foreground: var(--text-dark);
 
-  /* Dashboard section accents (Mega-commit A #8). */
+  /* Cred + Newspaper light-mode tokens (Commit 15). Replaces the warm
+     yellow --bg-cream with a calibrated cream stack: page bg slightly
+     darker than card bg so cards "lift" off the page with no shadow. */
+  --cred-page-bg: #faf7f2;
+  --cred-card-bg: #fffbf4;
+  --cred-border: #e8e2d5;
+  --cred-border-soft: #efe9dc;
+  --cred-text-primary: #1a1614;
+  --cred-text-secondary: #6b6359;
+  --cred-text-meta: #9b9389;
+  --cred-flourish: #c4a574;
+
+  /* Pastel stat-card gradients (welcome row). */
+  --cred-grad-peach: linear-gradient(135deg, #ffe8d6 0%, #ffd5b8 100%);
+  --cred-grad-mint: linear-gradient(135deg, #d6f5e3 0%, #b8ecd0 100%);
+  --cred-grad-blush: linear-gradient(135deg, #ffe0e6 0%, #ffc8d3 100%);
+  --cred-grad-lavender: linear-gradient(135deg, #ede4ff 0%, #dcc8ff 100%);
+
+  /* Cred-tone count-chip palette (replaces Mega-commit A bright pairs).
+     Letter-spaced, warm, low-saturation. Picked to read distinct on the
+     cream card bg without shouting. */
+  --chip-red-bg: #fde3e6;
+  --chip-red-fg: #b8425a;
+  --chip-amber-bg: #fcebd1;
+  --chip-amber-fg: #9c6019;
+  --chip-green-bg: #d8eee0;
+  --chip-green-fg: #2b6a40;
+  --chip-grey-bg: #efe9dc;
+  --chip-grey-fg: #756c5e;
+  --chip-blue-bg: #dce8f4;
+  --chip-blue-fg: #2e5a8a;
+  --chip-violet-bg: #e5dcf0;
+  --chip-violet-fg: #5a3d8c;
+
+  /* Dashboard now reads --background to render Cred cream. Other pages
+     using `bg-background` (Tailwind) also pick this up, so the landing
+     page's hero remains its own component-level color and isn't affected. */
+  --background: var(--cred-page-bg);
+
+  /* SECTION_ACCENTS retained — exported from _primitives.tsx and consumed
+     only by row-dot resolvers (no longer drives the vertical bar pattern
+     that shipped in Mega-commit A #8 — that bar is removed in Commit 15). */
   --accent-alerts: #E24B4A;
   --accent-cadence: #1D9E75;
   --accent-decisions: #EF9F27;
@@ -26,59 +68,6 @@
   --accent-slack: #7F77DD;
   --accent-notion: #6E6AC4;
   --accent-email: #888780;
-
-  /* Count-chip color pairs (#16). */
-  --chip-red-bg: #FEE2E2;
-  --chip-red-fg: #B91C1C;
-  --chip-amber-bg: #FEF3C7;
-  --chip-amber-fg: #B45309;
-  --chip-green-bg: #DCFCE7;
-  --chip-green-fg: #166534;
-  --chip-grey-bg: #F3F4F6;
-  --chip-grey-fg: #6B7280;
-
-  /* Subtle dashboard surface gradient (#13). */
-  --dashboard-grad-top: #FAFAF8;
-  --dashboard-grad-bottom: #FFFFFF;
-}
-
-.dashboard-surface {
-  background: linear-gradient(
-    180deg,
-    var(--dashboard-grad-top) 0%,
-    var(--dashboard-grad-bottom) 240px
-  );
-}
-
-/* Density toggle (#10). Drives row padding/font-size + section vertical
-   spacing. The toggle sets [data-density] on <main>; rows/sections opt in
-   via the dash-row-inner / dash-section classes added on the primitives. */
-[data-density="compact"] .dash-row-inner {
-  padding-top: 4px;
-  padding-bottom: 4px;
-  font-size: 12px;
-}
-[data-density="comfortable"] .dash-row-inner {
-  padding-top: 6px;
-  padding-bottom: 6px;
-  font-size: 13.5px;
-}
-[data-density="spacious"] .dash-row-inner {
-  padding-top: 12px;
-  padding-bottom: 12px;
-  font-size: 14px;
-}
-[data-density="compact"] .dash-section {
-  padding-top: 10px;
-  padding-bottom: 10px;
-}
-[data-density="comfortable"] .dash-section {
-  padding-top: 16px;
-  padding-bottom: 16px;
-}
-[data-density="spacious"] .dash-section {
-  padding-top: 24px;
-  padding-bottom: 24px;
 }
 
 @theme inline {
@@ -95,6 +84,10 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Tabular numerals + Inter stylistic alternates (cv11=alt 4, ss01=open digit
+     shapes) for newspaper-style aligned digits in dashboard meta. Pulled to
+     body level so every meta/timestamp/count gets tnum by default. */
+  font-feature-settings: 'tnum', 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -103,3 +96,10 @@ body {
   background: var(--accent-copper);
   color: var(--bg-light);
 }
+
+/* Hybrid lowercase utility (Commit 15). Apply EXPLICITLY to UI-label
+   elements: section headers, button labels, chip text, meta. NEVER to user
+   content (email subjects, sender names, brand names, decision titles, OKR
+   text, calendar event titles, stat-card uppercase micro-labels). Greppable
+   so the rule is reversible. */
+.cred-ui-lower { text-transform: lowercase; }

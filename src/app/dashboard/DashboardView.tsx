@@ -34,7 +34,6 @@ import {
   buildSlackChannelLink,
   SECTION_ACCENTS,
 } from "./_primitives";
-import { DensityToggle, useDensity } from "@/components/dashboard/DensityToggle";
 import { EmailSlidePanel } from "@/components/dashboard/EmailSlidePanel";
 import { EngagementStreakBadge } from "@/components/dashboard/EngagementStreakBadge";
 import {
@@ -166,7 +165,6 @@ function DashboardViewInner() {
     if (isLoaded && !isSignedIn) router.replace("/");
   }, [isLoaded, isSignedIn, router]);
 
-  const density = useDensity();
   const snooze = useSnooze();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [helpModalOpen, setHelpModalOpen] = useState(false);
@@ -387,12 +385,11 @@ function DashboardViewInner() {
     showEscalationBanner;
 
   return (
-    <main
-      className="min-h-screen p-6 dashboard-surface"
-      data-density={density}
-    >
+    <main className="min-h-screen p-6">
       <header className="flex justify-between items-center max-w-4xl mx-auto">
-        <h1 className="text-xl font-semibold">Project Wingman</h1>
+        <h1 className="cred-ui-lower text-xl font-medium tracking-[-0.01em] text-[var(--cred-text-primary)]">
+          project wingman
+        </h1>
         <div className="flex items-center gap-3">
           {/* Help me think — hidden for State B (assessment never engaged).
               State A/C/D get the button. Same precedence as the assessment
@@ -403,18 +400,18 @@ function DashboardViewInner() {
               <button
                 type="button"
                 onClick={() => setHelpModalOpen(true)}
-                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+                className="cred-ui-lower rounded-[4px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] px-3 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-text-primary)] hover:bg-[var(--cred-border-soft)]/40"
               >
-                Help me think
+                help me think
               </button>
             )}
           <Link
             href="/daily"
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+            className="cred-ui-lower rounded-[4px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] px-3 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-text-primary)] hover:bg-[var(--cred-border-soft)]/40"
           >
-            Sharpen the day
+            sharpen the day
             {streak && streak.streakDays > 0 && (
-              <span className="ml-1.5 text-xs text-gray-500">
+              <span className="ml-1.5 text-[11px] tabular-nums text-[var(--cred-text-meta)]">
                 · {streak.streakDays}d
               </span>
             )}
@@ -422,11 +419,10 @@ function DashboardViewInner() {
           <button
             onClick={() => runIngest(false)}
             disabled={isIngesting}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+            className="cred-ui-lower rounded-[4px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] px-3 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-text-primary)] hover:bg-[var(--cred-border-soft)]/40 disabled:opacity-50"
           >
-            {isIngesting ? "Refreshing..." : "Refresh inbox"}
+            {isIngesting ? "refreshing..." : "refresh inbox"}
           </button>
-          <DensityToggle />
           <EngagementStreakBadge />
           <UserButton>
             <UserButton.MenuItems>
@@ -473,82 +469,86 @@ function DashboardViewInner() {
         </div>
       )}
 
-      {/* Welcome card — reduced visual weight vs the original h2/grid layout.
-          Stays at the top per the redesign brief: name greeting + ingest
-          progress + counts + Classify-all. NOT a DashboardSection — it's the
-          opening "hello" card, not a list surface. */}
-      <section className="max-w-4xl mx-auto mt-6">
-        <h2 className="font-serif text-2xl font-medium tracking-tight">
-          Welcome, {firstName}.
+      {/* Welcome (Commit 15): Cred + Newspaper treatment. Greeting body
+          lowercase per hybrid rule, founder name keeps original casing.
+          Stat cards are pastel-gradient hero cards (peach + mint), 44px
+          light-weight tabular numerals. Classify-all sits below with explicit
+          mb-8 (carried from Commit 14 Bug 3). */}
+      <section className="max-w-4xl mx-auto mt-8">
+        <h2 className="text-[36px] font-light leading-tight tracking-[-0.035em] text-[var(--cred-text-primary)]">
+          <span className="cred-ui-lower">welcome, </span>
+          <span>{firstName}</span>
+          <span className="cred-ui-lower">.</span>
         </h2>
 
         {isIngesting && firstIngestCount === null && (
-          <div className="mt-3 flex items-center gap-3">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700" />
+          <div className="mt-4 flex items-center gap-3">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--cred-border)] border-t-[var(--cred-text-secondary)]" />
             <div>
-              <p className="text-gray-700 text-sm">
+              <p className="text-[13.5px] text-[var(--cred-text-secondary)]">
                 Reading your last 30 days of email…
               </p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Usually takes 30–90 seconds.
+              <p className="cred-ui-lower mt-0.5 text-[12px] text-[var(--cred-text-meta)]">
+                usually takes 30–90 seconds.
               </p>
             </div>
           </div>
         )}
 
         {firstIngestCount !== null && !isIngesting && (
-          <p className="mt-3 text-gray-700 text-sm">
+          <p className="mt-4 text-[13.5px] text-[var(--cred-text-secondary)]">
             Found {firstIngestCount} emails from the last 30 days.
           </p>
         )}
 
         {ingestError && (
-          <p className="mt-3 text-sm text-red-600">{ingestError}</p>
+          <p className="mt-3 text-[13px] text-[var(--chip-red-fg)]">{ingestError}</p>
         )}
 
         {(meError || countsError) && (
-          <p className="mt-3 text-sm text-red-600">Could not load. Refresh.</p>
+          <p className="mt-3 text-[13px] text-[var(--chip-red-fg)]">Could not load. Refresh.</p>
         )}
 
         {refreshToast && (
-          <p className="mt-3 text-sm text-green-700">{refreshToast}</p>
+          <p className="mt-3 text-[13px] text-[var(--chip-green-fg)]">{refreshToast}</p>
         )}
 
-        {/* Commit 14 Bug 2: stat card typography pulled into the dashboard
-            scale. Was text-[11px] uppercase label + text-lg semibold value
-            (off-scale, looked like a footnote). Now uses the same 13.5px
-            row-body weight as the rest of the dashboard. */}
-        <div className="mt-4 grid grid-cols-2 gap-3 max-w-md">
-          <div className="rounded-lg border border-gray-200 p-3">
-            <div className="text-[13px] font-medium text-gray-500">
-              Emails ingested
-            </div>
-            <div className="mt-1 text-lg font-medium text-gray-900">
+        {/* Pastel-gradient stat hero cards. Labels stay UPPERCASE letter-
+            spaced — these are tracked micro-labels, not UI text in the
+            lowercase rule's scope. Values use tabular-nums for digit
+            alignment across the two cards. */}
+        <div className="mt-6 grid grid-cols-2 gap-4">
+          <div
+            className="flex min-h-[120px] flex-col justify-between rounded-[10px] p-6"
+            style={{ background: "var(--cred-grad-peach)" }}
+          >
+            <span className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-[#6b4423] opacity-80">
+              emails ingested
+            </span>
+            <span className="text-[44px] font-light leading-none tracking-[-0.04em] tabular-nums text-[var(--cred-text-primary)]">
               {counts?.total ?? "—"}
-            </div>
+            </span>
           </div>
-          <div className="rounded-lg border border-gray-200 p-3">
-            <div className="text-[13px] font-medium text-gray-500">
-              Last sync
-            </div>
-            <div className="mt-1 text-lg font-medium text-gray-900">
+          <div
+            className="flex min-h-[120px] flex-col justify-between rounded-[10px] p-6"
+            style={{ background: "var(--cred-grad-mint)" }}
+          >
+            <span className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-[#2b6a40] opacity-80">
+              last sync
+            </span>
+            <span className="text-[44px] font-light leading-none tracking-[-0.04em] tabular-nums text-[var(--cred-text-primary)]">
               {formatRelativeTime(me?.lastIngestedAt)}
-            </div>
+            </span>
           </div>
         </div>
 
-        {/* Commit 14 Bug 3: add explicit bottom spacing so the welcome
-            section visually closes before the next dashboard section starts.
-            Was mt-4 with no mb-* on the wrapper, so Classify-all bumped
-            straight into the alerts section. mb-8 matches the typical
-            section-gap in the row-pattern grid. */}
-        <div className="mt-4 mb-8">
+        <div className="mt-6 mb-8">
           <button
             disabled
             title="Available next session"
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+            className="cred-ui-lower rounded-[4px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] px-3 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-text-primary)] hover:bg-[var(--cred-border-soft)]/40 disabled:opacity-50"
           >
-            Classify all
+            classify all
           </button>
         </div>
       </section>
@@ -838,18 +838,19 @@ function DashboardViewInner() {
           chipColor={(counts?.urgent ?? 0) > 0 ? "red" : "grey"}
         />
 
-        <div className="flex items-center justify-between mb-3 flex-wrap gap-3 px-2">
+        <div className="flex items-center justify-between mb-3 mt-3 flex-wrap gap-3 px-4">
           <div className="flex items-center gap-2 flex-wrap">
             {FILTERS.map((f) => {
               const c = countFor(counts, f.value);
+              const isActive = filter === f.value;
               return (
                 <button
                   key={f.value}
                   onClick={() => setFilter(f.value)}
-                  className={`text-xs px-2.5 py-1 rounded-full border transition ${
-                    filter === f.value
-                      ? "bg-black text-white border-black"
-                      : "bg-white text-gray-600 border-gray-300 hover:border-gray-500"
+                  className={`cred-ui-lower text-[11px] tracking-[0.02em] px-2.5 py-1 rounded-[3px] border transition ${
+                    isActive
+                      ? "border-[var(--cred-text-primary)] bg-[var(--cred-text-primary)] text-[var(--cred-card-bg)]"
+                      : "border-[var(--cred-border)] bg-[var(--cred-card-bg)] text-[var(--cred-text-secondary)] hover:border-[var(--cred-text-meta)]"
                   }`}
                 >
                   {f.label}
@@ -861,34 +862,34 @@ function DashboardViewInner() {
         </div>
 
         {counts && counts.pending > 0 && (
-          <p className="mb-3 px-2 text-sm text-gray-600">
-            Classifying your inbox… ({counts.pending} remaining)
+          <p className="cred-ui-lower mb-3 px-4 text-[13px] text-[var(--cred-text-secondary)]">
+            classifying your inbox… ({counts.pending} remaining)
           </p>
         )}
 
         {nudges.observations.length > 0 && (
-          <div className="mb-3 space-y-1 px-2">
+          <div className="mb-3 space-y-1 px-4">
             {nudges.observations.map((obs, i) => (
               <Link
                 key={i}
                 href={obs.href}
-                className="block text-sm italic text-gray-600 hover:text-gray-900 hover:underline"
+                className="block text-[13px] italic text-[var(--cred-text-secondary)] hover:text-[var(--cred-text-primary)] hover:underline"
               >
                 {obs.text}{" "}
-                <span className="not-italic text-xs text-gray-500">→</span>
+                <span className="not-italic text-[11px] text-[var(--cred-text-meta)]">→</span>
               </Link>
             ))}
           </div>
         )}
 
         {emailsHook.error ? (
-          <p className="mt-3 px-2 text-sm text-red-600">
+          <p className="mt-3 px-4 text-[13px] text-[var(--chip-red-fg)]">
             Could not load. Refresh.
           </p>
         ) : loadingFirstPage ? (
-          <p className="px-2 text-gray-500 text-sm">Loading...</p>
+          <p className="cred-ui-lower px-4 py-2 text-[13px] text-[var(--cred-text-meta)]">loading…</p>
         ) : emails.length === 0 ? (
-          <p className="px-2 text-gray-500 text-sm">
+          <p className="px-4 py-2 text-[13px] text-[var(--cred-text-secondary)]">
             {EMPTY_BUCKET_COPY[filter]}
           </p>
         ) : (
@@ -940,18 +941,18 @@ function DashboardViewInner() {
               })}
             </DashboardRowList>
             {!reachedEnd && !loadingMore && (
-              <div className="mt-3 flex justify-center">
+              <div className="mt-3 flex justify-center pb-3">
                 <button
                   onClick={() => emailsHook.setSize((s) => s + 1)}
-                  className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+                  className="cred-ui-lower rounded-[4px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] px-3 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-text-primary)] hover:bg-[var(--cred-border-soft)]/40"
                 >
-                  Load more
+                  load more
                 </button>
               </div>
             )}
             {loadingMore && (
-              <p className="mt-3 text-center text-xs text-gray-500">
-                Loading more...
+              <p className="cred-ui-lower mt-3 pb-3 text-center text-[11px] text-[var(--cred-text-meta)]">
+                loading more…
               </p>
             )}
           </>

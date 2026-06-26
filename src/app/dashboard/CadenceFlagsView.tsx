@@ -51,7 +51,7 @@ export function CadenceFlagsView({ onCommentClick }: CadenceFlagsViewProps = {})
     return (
       <DashboardSection accentColor={SECTION_ACCENTS.cadence}>
         <DashboardSectionHeader title="cadence" />
-        <p className="px-2 py-1 font-serif text-xs italic text-gray-500">
+        <p className="px-4 py-3 text-[13px] italic text-[var(--cred-text-secondary)]">
           All caught up — no relationships gone cold this week.
         </p>
       </DashboardSection>

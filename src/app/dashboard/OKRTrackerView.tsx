@@ -60,7 +60,7 @@ export function OKRTrackerView({ onCommentClick }: OKRTrackerViewProps = {}) {
     return (
       <DashboardSection accentColor={SECTION_ACCENTS.okrs}>
         <DashboardSectionHeader title="okrs" />
-        <p className="px-2 py-1 font-serif text-xs italic text-gray-500">
+        <p className="px-4 py-3 text-[13px] italic text-[var(--cred-text-secondary)]">
           No OKR pages in Notion yet — paste a quarterly OKR page and Wingman
           will detect + render it here.
         </p>

@@ -144,7 +144,7 @@ export function CalendarTodayView({
         </div>
       )}
       {timedToday.length === 0 && allDayToday.length === 0 && (
-        <p className="px-2 py-1 font-serif text-xs italic text-gray-500">
+        <p className="px-4 py-3 text-[13px] italic text-[var(--cred-text-secondary)]">
           No more meetings today. Enjoy the space.
         </p>
       )}

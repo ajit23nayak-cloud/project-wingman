@@ -51,9 +51,9 @@ export function DecisionsPostmortemDueView({
     return (
       <DashboardSection accentColor={SECTION_ACCENTS.decisions}>
         <DashboardSectionHeader title="decisions" />
-        <p className="px-2 py-1 font-serif text-xs italic text-gray-500">
+        <p className="px-4 py-3 text-[13px] italic text-[var(--cred-text-secondary)]">
           No decisions logged yet — capture your first one at{" "}
-          <Link href="/decisions" className="underline hover:text-gray-700">
+          <Link href="/decisions" className="underline hover:text-[var(--cred-text-primary)]">
             /decisions
           </Link>
           .

@@ -111,9 +111,12 @@ export function DashboardRow({
   };
 
   const Icon = SOURCE_ICON[badge] ?? null;
+  // Cred + Newspaper row chrome (Commit 15): time uses tabular-nums Inter
+  // (was font-mono), badge gets the cream card bg, hint goes lowercase via
+  // cred-ui-lower. `dash-row-inner` removed — density toggle is gone.
   const inner = (
     <div
-      className={`dash-row-inner flex items-center gap-3 px-2 ${
+      className={`flex items-center gap-3 px-3 py-2 ${
         fade ? "opacity-50" : ""
       }`}
     >
@@ -121,15 +124,15 @@ export function DashboardRow({
         className={`h-2 w-2 shrink-0 rounded-full ${DOT_CLASS[dot]}`}
         aria-label={dotLabel}
       />
-      <span className="min-w-[56px] shrink-0 font-mono text-xs text-gray-500">
+      <span className="min-w-[56px] shrink-0 text-[12px] tabular-nums text-[var(--cred-text-meta)]">
         {time}
       </span>
-      <span className="flex-1 truncate text-sm font-medium text-gray-900">
+      <span className="flex-1 truncate text-[14.5px] text-[var(--cred-text-primary)]">
         {title}
       </span>
       <span className="flex shrink-0 items-center">
         <span
-          className="inline-flex items-center justify-center rounded border-[0.5px] border-gray-200 bg-gray-50 px-1.5 py-0.5 font-mono text-[11px] lowercase text-gray-500"
+          className="cred-ui-lower inline-flex items-center justify-center rounded-[3px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] px-1.5 py-0.5 text-[11px] tracking-[0.02em] text-[var(--cred-text-secondary)]"
           title={badge}
           aria-label={badge}
         >
@@ -143,7 +146,7 @@ export function DashboardRow({
         )}
       </span>
       {actions && actions.length > 0 && <RowActions actions={actions} />}
-      <span className="ml-2 shrink-0 font-mono text-[11px] lowercase text-gray-500 group-hover:text-gray-900">
+      <span className="cred-ui-lower ml-2 shrink-0 text-[11px] tabular-nums text-[var(--cred-text-meta)] group-hover:text-[var(--cred-text-primary)]">
         {hint}
       </span>
       {canComment && (
@@ -170,7 +173,7 @@ export function DashboardRow({
   );
 
   const wrapperClass =
-    "group block w-full text-left hover:bg-gray-50 transition-colors";
+    "group block w-full text-left hover:bg-[var(--cred-border-soft)]/40 transition-colors";
 
   // Mega-commit A #15: rows fade out smoothly when archived/snoozed/dismissed.
   // Outer wrapper is a motion.div so AnimatePresence in DashboardRowList can
@@ -248,28 +251,33 @@ type DashboardSectionHeaderProps = {
   chipColor?: ChipColor;
 };
 
-// Compact section header — 11px, weight 500, grey-tertiary, lowercase.
-// Optional count badge on the right (e.g., "3 cold", "2 overdue").
+// Newspaper-style section header (Commit 15): cream-card strip with warm
+// hairline top/bottom, gold ✦ flourish + lowercase title at 15px/500. Count
+// chip moves inside the same strip on the right. Replaces the previous
+// 11px footnote header — now feels like the masthead of a section.
 export function DashboardSectionHeader({
   title,
   count,
   chipColor,
 }: DashboardSectionHeaderProps) {
   return (
-    <div className="mb-1 flex items-center justify-between px-2">
-      <h2 className="text-[11px] font-medium lowercase tracking-wide text-gray-400">
+    <div className="flex items-center justify-between border-y border-[var(--cred-border)] bg-[var(--cred-card-bg)] px-4 py-2">
+      <h2 className="cred-ui-lower flex items-center gap-2 text-[15px] font-medium tracking-[-0.01em] text-[var(--cred-text-primary)]">
+        <span aria-hidden="true" className="text-[var(--cred-flourish)]">
+          ✦
+        </span>
         {title}
       </h2>
       {count &&
         (chipColor ? (
           <span
-            className="inline-block rounded-full px-2 py-0.5 font-mono text-[10px] lowercase"
+            className="cred-ui-lower inline-block rounded-[3px] px-2 py-0.5 text-[11px] tabular-nums tracking-[0.02em]"
             style={CHIP_STYLE[chipColor]}
           >
             {count}
           </span>
         ) : (
-          <span className="font-mono text-[11px] lowercase text-gray-400">
+          <span className="cred-ui-lower text-[12px] tabular-nums text-[var(--cred-text-meta)]">
             {count}
           </span>
         ))}
@@ -280,37 +288,36 @@ export function DashboardSectionHeader({
 type DashboardSectionProps = {
   children: ReactNode;
   className?: string;
-  // Mega-commit A #8: 4px colored left-border accent. Pass a CSS-var string
-  // (e.g. `"var(--accent-cadence)"`) or a raw hex. Omit for no accent.
+  // Commit 15 NOTE: `accentColor` is accepted for back-compat with sub-views
+  // that still pass it from Mega-commit A's pattern, but it's now a no-op.
+  // The Cred design replaces the 4px vertical bar with the newspaper-strip
+  // section header (DashboardSectionHeader handles the visual demarcation).
+  // SECTION_ACCENTS exports remain — they still color row dots indirectly
+  // via the dotFor* resolvers in some sub-views.
   accentColor?: string;
 };
 
-// Section wrapper — 10px (py-2.5) padding inside, 0.5px top border so
-// adjacent sections render a hairline divider. The first section's top
-// border is hidden by the parent (set border-t-0 on its outer wrapper).
+// Section wrapper (Commit 15): cream-card group on the cream-page bg, with
+// hairline border around the whole section. Section header sits inside as
+// a full-width newspaper strip; row content fills the rest of the card.
 export function DashboardSection({
   children,
   className = "",
-  accentColor,
 }: DashboardSectionProps) {
-  const accentStyle: CSSProperties | undefined = accentColor
-    ? { borderLeftWidth: 4, borderLeftStyle: "solid", borderLeftColor: accentColor }
-    : undefined;
   return (
     <section
-      className={`dash-section max-w-4xl mx-auto border-t-[0.5px] border-gray-200 py-2.5 ${className}`}
-      style={accentStyle}
+      className={`max-w-4xl mx-auto mt-6 overflow-hidden rounded-[6px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] ${className}`}
     >
       {children}
     </section>
   );
 }
 
-// Container for stacked rows — 0.5px hairline divider between rows. Wrapped
+// Container for stacked rows — warm hairline divider between rows. Wrapped
 // in AnimatePresence so DashboardRow's exit animation runs when rows unmount.
 export function DashboardRowList({ children }: { children: ReactNode }) {
   return (
-    <div className="divide-y-[0.5px] divide-gray-100">
+    <div className="divide-y divide-[var(--cred-border-soft)]">
       <AnimatePresence initial={false}>{children}</AnimatePresence>
     </div>
   );
