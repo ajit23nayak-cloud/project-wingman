@@ -38,6 +38,7 @@ import { EmailSlidePanel } from "@/components/dashboard/EmailSlidePanel";
 import { EngagementStreakBadge } from "@/components/dashboard/EngagementStreakBadge";
 import { TodaysSignalHero } from "@/components/TodaysSignalHero";
 import { EveningReflectionBanner } from "@/components/EveningReflectionBanner";
+import { VoiceDigestPlayer } from "@/components/VoiceDigestPlayer";
 import {
   useMe,
   useCounts,
@@ -472,6 +473,15 @@ function DashboardViewInner() {
           </Link>
         </div>
       )}
+
+      {/* Commit 19a: live Voice Digest player — fetches today's signed
+          audio URL via useTodaysBriefing. Falls back to a quiet message
+          when no briefing for today exists yet (cron generates at the
+          user's local 06:00 via the generate-briefing route). Mounted
+          ABOVE TodaysSignalHero — listen first, read second. */}
+      <div className="mx-auto mt-6 max-w-4xl">
+        <VoiceDigestPlayer />
+      </div>
 
       {/* Commit 18: Today's Signal hero — full-width cream card with the
           latest cron-generated one-sentence summary. Falls back to a

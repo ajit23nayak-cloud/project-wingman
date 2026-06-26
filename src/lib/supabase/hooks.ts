@@ -2060,3 +2060,37 @@ export function useShouldShowEveningBanner(): boolean {
     return false;
   }
 }
+
+// ---------- Audio briefing (Commit 19a) ------------------------------------
+
+export type TodaysBriefingResponse =
+  | {
+      ready: true;
+      audioUrl: string;
+      durationSeconds: number | null;
+      briefingText: string;
+      generatedAt: string | null;
+    }
+  | {
+      ready: false;
+      status: "pending" | "generating" | "ready" | "failed" | "none";
+    };
+
+// Polls /api/audio-briefing/today. Refreshes every 5 minutes so a
+// just-generated briefing surfaces without a hard reload.
+export function useTodaysBriefing() {
+  const { data: me } = useMe();
+  return useSWR<TodaysBriefingResponse>(
+    me ? "/api/audio-briefing/today" : null,
+    async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok && res.status !== 404) {
+        throw new Error(`briefing_${res.status}`);
+      }
+      return (await res.json()) as TodaysBriefingResponse;
+    },
+    {
+      refreshInterval: 5 * 60 * 1000,
+    },
+  );
+}

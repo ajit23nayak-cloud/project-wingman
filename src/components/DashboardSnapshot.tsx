@@ -282,7 +282,7 @@ export function DashboardSnapshot() {
           3 things need you. rest can wait.
         </p>
 
-        <VoiceDigestPlayer />
+        <VoiceDigestPlayer decorative />
 
         {SECTIONS.map((s) => (
           <DashSectionBlock key={s.title} section={s} />
