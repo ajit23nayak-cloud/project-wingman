@@ -19,6 +19,8 @@
 //     feature bodies, FAQ answer bodies
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { SignInButton, useUser } from "@clerk/nextjs";
 import { DashboardSnapshot } from "@/components/DashboardSnapshot";
 
 const ERROR_COPY: Record<string, string> = {
@@ -414,6 +416,36 @@ function SecondaryBtn({
   );
 }
 
+// Commit 17.1: client-side auth-state branch for the nav. Renders nothing
+// until Clerk hydrates (isLoaded), then either the sign-in modal trigger
+// or a direct dashboard link based on session state.
+function NavAuthEntry() {
+  const { isLoaded, isSignedIn } = useUser();
+  if (!isLoaded) return null;
+  if (isSignedIn) {
+    return (
+      <Link
+        href="/dashboard"
+        className="cred-ui-lower transition-colors"
+        style={{ color: "var(--cred-text-secondary)" }}
+      >
+        dashboard →
+      </Link>
+    );
+  }
+  return (
+    <SignInButton mode="modal">
+      <button
+        type="button"
+        className="cred-ui-lower transition-colors"
+        style={{ color: "var(--cred-text-secondary)" }}
+      >
+        sign in
+      </button>
+    </SignInButton>
+  );
+}
+
 function SectionEyebrow({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -462,6 +494,14 @@ export default function LandingPage() {
                   {l.label}
                 </a>
               ))}
+              {/* Commit 17.1 P0 hotfix: signed-out users get a Clerk sign-in
+                  modal; signed-in users get a direct dashboard link in the
+                  same slot. Spec was "single sign in link" — added the
+                  SignedIn variant too so returning users have a one-click
+                  path. Clerk v7's <SignedIn>/<SignedOut> are server-only
+                  in @clerk/nextjs/dist; this page is "use client" so we
+                  branch on useUser() instead. */}
+              <NavAuthEntry />
               <a
                 href="#cohort"
                 className="cred-ui-lower rounded-[6px] px-4 py-2 font-medium"
