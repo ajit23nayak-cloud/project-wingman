@@ -7870,3 +7870,11 @@ Migration 0026 needs Supabase Monaco apply. Verification queries are in the migr
 | 7 | No regressions on Commits 15-18 | ✓ |
 
 @AJIT: 19a shipping. Live audio player on /dashboard above today's signal. Migration 0026 needs Supabase apply when convenient. Real wallclock at this ship: 19:30 IST Friday June 26.
+
+## [2026-06-26 17:55 UTC | Tab 1] Wallclock correction — Commit 19a timestamp was -3h55m drift
+
+The H2 above (14:00 UTC) used my mental-model wallclock, not the host's. Real time at first push attempt was 17:55 UTC. Hook correctly blocked the push (rule: latest H2 < 30 min). Engineering record is otherwise intact — `7af198f` exists in git, all 7 files committed correctly.
+
+Lesson for next ship: always run `date -u` before writing the H2 timestamp, not "real wallclock at this ship: 19:30 IST" mental math.
+
+This is a log-only commit appended atop `7af198f` to refresh the hook's H2 freshness window before re-attempting push.
