@@ -306,6 +306,8 @@ export function useSlackMessages(filter: FilterValue) {
         )
         .eq("status", "processed")
         .not("classification", "is", null)
+        // 13a snooze filter
+        .or(`snoozed_until.is.null,snoozed_until.lte.${new Date().toISOString()}`)
         .order("received_at", { ascending: false })
         .limit(20);
       if (filter !== "all") {
@@ -395,6 +397,8 @@ export function useNotionPages(filter: FilterValue | null) {
         )
         .eq("status", "processed")
         .not("classification", "is", null)
+        // 13a snooze filter
+        .or(`snoozed_until.is.null,snoozed_until.lte.${new Date().toISOString()}`)
         .order("received_at", { ascending: false })
         .limit(20);
       // filter is non-null inside the fetcher (gated above), but TS doesn't
@@ -573,6 +577,8 @@ export function useCalendarToday(enabled: boolean | null) {
           "id, google_event_id, title, start_at, end_at, all_day, location, conference_link, conference_type, organizer_email, organizer_self, attendees, attendee_count, external_attendee_count, user_response_status, event_status, prep_priority, prep_notes",
         )
         .eq("event_status", "confirmed")
+        // 13a snooze filter
+        .or(`snoozed_until.is.null,snoozed_until.lte.${new Date().toISOString()}`)
         .gte("start_at", startOfToday.toISOString())
         .lt("start_at", startOfDayAfter.toISOString())
         .order("start_at", { ascending: true });
@@ -1154,6 +1160,8 @@ export function useEmails(filter: FilterValue, pageSize: number) {
         "id, gmail_message_id, from_address, to_addresses, subject, snippet, received_at, classification, classification_reason, classification_error, status, drafts(status)",
       )
       .eq("archived_stale", false)
+      // Mega-commit B 13a: hide snoozed rows. Migration 0025 added the column.
+      .or(`snoozed_until.is.null,snoozed_until.lte.${new Date().toISOString()}`)
       .order("received_at", { ascending: false })
       .range(from, to);
     if (f !== "all") q = q.eq("classification", f);
@@ -1711,6 +1719,159 @@ export function useDeleteFeedback() {
         (key) => Array.isArray(key) && key[0] === "feedback_notes",
       );
       return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+// ---------- Snooze (Mega-commit B 13a) -------------------------------------
+
+export type SnoozeSourceTable =
+  | "emails"
+  | "slack_messages"
+  | "calendar_events"
+  | "notion_pages"
+  | "contacts"
+  | "decisions";
+
+// Mutates `snoozed_until` on the chosen row. Invalidates the relevant list
+// SWR key so the dashboard repaints without the snoozed row. The 6 list
+// hooks all carry their snooze filter inline, so invalidate-by-prefix is
+// enough to drop the row out of the visible set.
+export function useSnooze() {
+  const { mutate } = useSWRConfig();
+  return async (args: {
+    source_table: SnoozeSourceTable;
+    source_id: string;
+    snoozed_until: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/snooze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error ?? `snooze_${res.status}` };
+      }
+      // Map source_table → SWR key prefix used by the matching list hook.
+      const keyPrefix: Record<SnoozeSourceTable, string> = {
+        emails: "emails",
+        slack_messages: "slack_messages",
+        calendar_events: "calendar_today",
+        notion_pages: "notion_pages",
+        contacts: "contacts",
+        decisions: "decisions",
+      };
+      const prefix = keyPrefix[args.source_table];
+      await mutate((key) => Array.isArray(key) && key[0] === prefix);
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+export function useUnsnooze() {
+  const { mutate } = useSWRConfig();
+  return async (args: {
+    source_table: SnoozeSourceTable;
+    source_id: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch(
+        `/api/snooze/${args.source_table}/${args.source_id}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error ?? `unsnooze_${res.status}` };
+      }
+      const keyPrefix: Record<SnoozeSourceTable, string> = {
+        emails: "emails",
+        slack_messages: "slack_messages",
+        calendar_events: "calendar_today",
+        notion_pages: "notion_pages",
+        contacts: "contacts",
+        decisions: "decisions",
+      };
+      const prefix = keyPrefix[args.source_table];
+      await mutate((key) => Array.isArray(key) && key[0] === prefix);
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "network_error",
+      };
+    }
+  };
+}
+
+// ---------- Engagement streak (Mega-commit B 13a) --------------------------
+//
+// DISTINCT from useStreak() at line 757 — that one tracks MH ritual streak
+// (consecutive days of /daily completion). useEngagementStreak() tracks
+// consecutive days of /dashboard opens, surfaced as the "Day N with
+// Wingman" badge near UserButton. Naming locked by Ajit 2026-06-25 (b).
+
+export type EngagementStreakResponse = {
+  currentStreak: number;
+  longestStreak: number;
+  lastActivityDate: string | null;
+  totalDaysActive: number;
+};
+
+export function useEngagementStreak() {
+  const { data: me } = useMe();
+  return useSWR<EngagementStreakResponse>(
+    me ? ["engagement_streak", me.supabaseUserId] : null,
+    async () => {
+      const res = await fetch("/api/streak");
+      if (!res.ok) throw new Error(`engagement_streak_${res.status}`);
+      return (await res.json()) as EngagementStreakResponse;
+    },
+    { revalidateOnMount: true },
+  );
+}
+
+// Fire-and-forget increment. Called once per dashboard mount via a session-
+// scoped guard (see EngagementStreakBadge). Returns the post-increment
+// streak values so the caller can optimistically update the badge.
+export function useIncrementEngagementStreak() {
+  const { mutate } = useSWRConfig();
+  return async (): Promise<{
+    ok: boolean;
+    currentStreak?: number;
+    longestStreak?: number;
+    totalDaysActive?: number;
+    error?: string;
+  }> => {
+    try {
+      const res = await fetch("/api/streak/increment", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return {
+          ok: false,
+          error: data.error ?? `streak_increment_${res.status}`,
+        };
+      }
+      await mutate(
+        (key) => Array.isArray(key) && key[0] === "engagement_streak",
+      );
+      return {
+        ok: true,
+        currentStreak: data.currentStreak,
+        longestStreak: data.longestStreak,
+        totalDaysActive: data.totalDaysActive,
+      };
     } catch (err) {
       return {
         ok: false,

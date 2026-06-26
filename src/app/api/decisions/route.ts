@@ -78,6 +78,15 @@ export async function GET(req: NextRequest) {
     query = query.eq("status", statusParam);
   }
 
+  // Snooze-aware for the dashboard surface (postmortem_due filter is the
+  // dashboard row); other filters stay unfiltered so the user can find a
+  // snoozed decision to unsnooze it from /decisions.
+  if (statusParam === "postmortem_due") {
+    query = query.or(
+      `snoozed_until.is.null,snoozed_until.lte.${new Date().toISOString()}`,
+    );
+  }
+
   const { data, error } = await query
     .order("decision_made_at", { ascending: false })
     .limit(limit);

@@ -35,6 +35,7 @@ import {
 } from "./_primitives";
 import { DensityToggle, useDensity } from "@/components/dashboard/DensityToggle";
 import { EmailSlidePanel } from "@/components/dashboard/EmailSlidePanel";
+import { EngagementStreakBadge } from "@/components/dashboard/EngagementStreakBadge";
 import {
   useMe,
   useCounts,
@@ -42,6 +43,7 @@ import {
   useTriggerIngest,
   useDraftCount,
   useStreak,
+  useSnooze,
   useNudges,
   useEscalationCount7d,
   useSlackWorkspace,
@@ -137,6 +139,7 @@ export function DashboardView() {
   }, [isLoaded, isSignedIn, router]);
 
   const density = useDensity();
+  const snooze = useSnooze();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [openEmailId, setOpenEmailId] = useState<string | null>(null);
@@ -354,7 +357,7 @@ export function DashboardView() {
             href="/daily"
             className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
           >
-            Daily ritual
+            Sharpen the day
             {streak && streak.streakDays > 0 && (
               <span className="ml-1.5 text-xs text-gray-500">
                 · {streak.streakDays}d
@@ -369,6 +372,7 @@ export function DashboardView() {
             {isIngesting ? "Refreshing..." : "Refresh inbox"}
           </button>
           <DensityToggle />
+          <EngagementStreakBadge />
           <UserButton>
             <UserButton.MenuItems>
               <UserButton.Link
@@ -670,6 +674,18 @@ export function DashboardView() {
                     title,
                   )
                 }
+                actions={[
+                  {
+                    kind: "snooze",
+                    onPickSnoozedUntil: (d) => {
+                      void snooze({
+                        source_table: "slack_messages",
+                        source_id: m.id,
+                        snoozed_until: d.toISOString(),
+                      });
+                    },
+                  },
+                ]}
               />
             ))}
           </DashboardRowList>
@@ -839,6 +855,18 @@ export function DashboardView() {
                         title,
                       )
                     }
+                    actions={[
+                      {
+                        kind: "snooze",
+                        onPickSnoozedUntil: (d) => {
+                          void snooze({
+                            source_table: "emails",
+                            source_id: email.id,
+                            snoozed_until: d.toISOString(),
+                          });
+                        },
+                      },
+                    ]}
                   />
                 );
               })}

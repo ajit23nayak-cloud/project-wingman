@@ -49,9 +49,13 @@ export async function GET(req: NextRequest) {
     .eq("user_id", supabaseUserId);
 
   if (filter === "cadence-break") {
+    // Snooze-aware: hide rows whose snoozed_until is in the future. Other
+    // views (recent/all/archived) are direct management surfaces and stay
+    // unfiltered so the user can find + unsnooze a contact intentionally.
     query = query
       .not("cadence_break_days", "is", null)
       .eq("archived", false)
+      .or(`snoozed_until.is.null,snoozed_until.lte.${new Date().toISOString()}`)
       .order("cadence_break_days", { ascending: false })
       .order("total_interactions_lifetime", { ascending: false });
   } else if (filter === "recent") {

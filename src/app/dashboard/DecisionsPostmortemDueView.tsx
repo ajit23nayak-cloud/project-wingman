@@ -14,6 +14,7 @@
 
 import {
   useDecisions,
+  useSnooze,
   type FeedbackSourceTable,
 } from "@/lib/supabase/hooks";
 import Link from "next/link";
@@ -43,6 +44,7 @@ export function DecisionsPostmortemDueView({
   onCommentClick,
 }: DecisionsPostmortemDueViewProps = {}) {
   const { data: decisions, isLoading } = useDecisions("postmortem_due");
+  const snooze = useSnooze();
 
   if (isLoading) return null;
   if (!decisions || decisions.length === 0) {
@@ -106,6 +108,18 @@ export function DecisionsPostmortemDueView({
                       )
                   : undefined
               }
+              actions={[
+                {
+                  kind: "snooze",
+                  onPickSnoozedUntil: (s) => {
+                    void snooze({
+                      source_table: "decisions",
+                      source_id: d.id,
+                      snoozed_until: s.toISOString(),
+                    });
+                  },
+                },
+              ]}
             />
           );
         })}

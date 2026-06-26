@@ -14,6 +14,7 @@
 
 import {
   useContacts,
+  useSnooze,
   type FeedbackSourceTable,
 } from "@/lib/supabase/hooks";
 import {
@@ -41,6 +42,7 @@ type CadenceFlagsViewProps = {
 
 export function CadenceFlagsView({ onCommentClick }: CadenceFlagsViewProps = {}) {
   const { data: contacts, isLoading } = useContacts("cadence-break");
+  const snooze = useSnooze();
 
   // Silent during the loading flicker; switch to a positive empty state when
   // the query lands with zero rows (Mega-commit A #11).
@@ -95,6 +97,18 @@ export function CadenceFlagsView({ onCommentClick }: CadenceFlagsViewProps = {})
                     )
                 : undefined
             }
+            actions={[
+              {
+                kind: "snooze",
+                onPickSnoozedUntil: (d) => {
+                  void snooze({
+                    source_table: "contacts",
+                    source_id: c.id,
+                    snoozed_until: d.toISOString(),
+                  });
+                },
+              },
+            ]}
           />
         ))}
       </DashboardRowList>

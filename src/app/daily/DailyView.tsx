@@ -141,17 +141,7 @@ function RitualCard({
 }) {
   const fields = useMemo(() => fieldsFor(variant, type), [variant, type]);
 
-  // One-time hydration from prefill. The previous `useState(prefill)` only
-  // read the prop on first mount, but DailyView's parent SWR fetch resolves
-  // AFTER mount — so empty prefill at t=0 stuck around even when today.data
-  // arrived at t=N. Tab 2 caught this in browser-verify (20:30 patch
-  // round): saved morning rows rendered as empty forms on /daily revisit,
-  // breaking the "edit your earlier entry" UX.
-  //
-  // Pattern: lazy useState seeded from prefill (so cache-hit mounts render
-  // with data already in state, no flicker), plus a useRef guard so once
-  // we've hydrated we never overwrite user edits with a re-incoming prefill
-  // (which would happen if SWR revalidates mid-typing).
+  // One-time hydration from prefill (see comment in original — unchanged).
   const [values, setValues] = useState<FieldValues>(() => prefill);
   const hydratedRef = useRef(Object.keys(prefill).length > 0);
   useEffect(() => {
@@ -165,6 +155,15 @@ function RitualCard({
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
+  // Mega-commit B 13a P1: sequential one-question-per-screen UX. The user
+  // navigates between fields with Back/Next; the final field shows Save.
+  // Question-by-question feels less like a form, more like a conversation.
+  // Index resets to 0 only on a fresh mount — preserved across re-renders.
+  const [step, setStep] = useState(0);
+  const totalSteps = fields.length;
+  const currentField = fields[step];
+  const isLast = step === totalSteps - 1;
+
   const handleField = (key: string, next: string | number) => {
     setValues((prev) => ({ ...prev, [key]: next }));
     setSavedAt(null);
@@ -172,6 +171,10 @@ function RitualCard({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isLast) {
+      setStep((s) => Math.min(s + 1, totalSteps - 1));
+      return;
+    }
     setSubmitting(true);
     setError(null);
     const raw: Record<string, unknown> = {};
@@ -199,32 +202,63 @@ function RitualCard({
     }
   };
 
+  // Empty card guard — if the ritual has no fields, render the original
+  // structure to avoid an unsubmittable form.
+  if (totalSteps === 0) {
+    return (
+      <section className="rounded-lg border border-gray-200 bg-white p-6">
+        <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+        <p className="mt-1 text-sm text-gray-600">{description}</p>
+        <p className="mt-4 text-sm text-gray-500">
+          Nothing to ritualize in this variant.
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-6">
-      <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+        <span className="text-xs text-gray-500">
+          Question {step + 1} of {totalSteps}
+        </span>
+      </div>
       <p className="mt-1 text-sm text-gray-600">{description}</p>
       <form onSubmit={handleSubmit} className="mt-5 space-y-5">
-        {fields.map((field) => (
-          <FieldRow
-            key={field.key}
-            field={field}
-            value={values[field.key]}
-            onChange={(next) => handleField(field.key, next)}
-            disabled={submitting}
-          />
-        ))}
-        <div className="flex items-center gap-3">
+        <FieldRow
+          key={currentField.key}
+          field={currentField}
+          value={values[currentField.key]}
+          onChange={(next) => handleField(currentField.key, next)}
+          disabled={submitting}
+        />
+        <div className="flex items-center justify-between gap-3">
           <button
-            type="submit"
-            disabled={submitting}
-            className="rounded-md bg-black text-white px-4 py-1.5 text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+            type="button"
+            onClick={() => setStep((s) => Math.max(s - 1, 0))}
+            disabled={submitting || step === 0}
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
-            {submitting ? "Saving…" : "Save"}
+            ← Back
           </button>
-          {savedAt && !error && (
-            <span className="text-xs text-green-700">Saved.</span>
-          )}
-          {error && <span className="text-xs text-red-600">{error}</span>}
+          <div className="flex items-center gap-3">
+            {savedAt && !error && (
+              <span className="text-xs text-green-700">Saved.</span>
+            )}
+            {error && <span className="text-xs text-red-600">{error}</span>}
+            <button
+              type="submit"
+              disabled={submitting}
+              className="rounded-md bg-black text-white px-4 py-1.5 text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+            >
+              {isLast
+                ? submitting
+                  ? "Saving…"
+                  : "Save"
+                : "Next →"}
+            </button>
+          </div>
         </div>
       </form>
     </section>
@@ -311,7 +345,7 @@ export function DailyView() {
 
       <div className="max-w-2xl mx-auto px-6 py-8">
         <div className="text-xs uppercase tracking-wide text-gray-500">
-          Daily ritual · {todayLabel}
+          Sharpen the day · {todayLabel}
         </div>
         <h1 className="mt-2 text-2xl font-semibold">
           Take a few minutes with yourself.

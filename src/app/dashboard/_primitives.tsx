@@ -14,6 +14,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { FeedbackSourceTable } from "@/lib/supabase/hooks";
 import { RowCommentIndicator } from "@/components/feedback/RowCommentIndicator";
 import { SOURCE_ICON } from "@/components/icons/SourceIcons";
+import { RowActions, type RowAction } from "@/components/dashboard/RowActions";
 
 export type DashboardDotColor = "red" | "amber" | "green" | "grey";
 
@@ -64,6 +65,10 @@ type DashboardRowProps = {
   sourceTable?: FeedbackSourceTable;
   sourceId?: string;
   onCommentClick?: (anchorEl: HTMLElement, prefilledTitle: string) => void;
+  // Mega-commit B 13a: inline quick actions (snooze for v0). Hover-revealed
+  // icon buttons in the right-hand area, between the badge and the 💬
+  // affordance. Pass undefined or [] for no actions.
+  actions?: RowAction[];
 };
 
 // Single dashboard row — pure visual. No internal state; callers wrap with
@@ -83,6 +88,7 @@ export function DashboardRow({
   sourceTable,
   sourceId,
   onCommentClick,
+  actions,
 }: DashboardRowProps) {
   // Commit 12: only render the comment-affordance + indicator when the row
   // is wired with both sourceTable and sourceId. This keeps backwards-compat
@@ -136,6 +142,7 @@ export function DashboardRow({
           />
         )}
       </span>
+      {actions && actions.length > 0 && <RowActions actions={actions} />}
       <span className="ml-2 shrink-0 font-mono text-[11px] lowercase text-gray-500 group-hover:text-gray-900">
         {hint}
       </span>
