@@ -130,11 +130,11 @@ function LiveVoiceDigestPlayer() {
   if (!data.ready) {
     const fallbackTitle =
       data.status === "generating"
-        ? "briefing being generated — refresh in a minute."
+        ? "brewing your first briefing… ☕"
         : data.status === "failed"
           ? "briefing generation failed. tomorrow we'll try again."
           : data.status === "pending"
-            ? "briefing scheduled for 06:00 local."
+            ? "your first briefing is being prepared — usually under 2 min"
             : "morning briefing arrives at 06:00 local time.";
     return (
       <StaticShell

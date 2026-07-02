@@ -891,6 +891,10 @@ export function useChatTurn() {
     assistantMessage?: string;
     turnsUsed?: number;
     error?: string;
+    // Server-provided conversational error message (Commit 19a.2 item 4).
+    // When present, the UI should render this verbatim instead of the
+    // raw `error` code.
+    userMessage?: string;
   }> => {
     try {
       const res = await fetch("/api/mh/chat", {
@@ -906,7 +910,12 @@ export function useChatTurn() {
           turnsUsed: data.turnsUsed,
         };
       }
-      return { ok: false, error: data.error ?? `chat_${res.status}` };
+      return {
+        ok: false,
+        error: data.error ?? `chat_${res.status}`,
+        userMessage:
+          typeof data.userMessage === "string" ? data.userMessage : undefined,
+      };
     } catch (err) {
       return {
         ok: false,
@@ -2076,8 +2085,14 @@ export type TodaysBriefingResponse =
       status: "pending" | "generating" | "ready" | "failed" | "none";
     };
 
-// Polls /api/audio-briefing/today. Refreshes every 5 minutes so a
-// just-generated briefing surfaces without a hard reload.
+// Polls /api/audio-briefing/today. Refresh cadence is adaptive:
+//   - 20s while a briefing is being generated/pending (welcome-briefing
+//     flow stamps status='generating' within ~1-2s of first ingest, and
+//     the cron usually finishes in under 2 min). This makes the UI flip
+//     to playable audio shortly after the cron completes.
+//   - 5min once ready=true, so we don't thrash the API once the user
+//     already has the audio.
+// SWR v2 supports refreshInterval as a function of the latest data.
 export function useTodaysBriefing() {
   const { data: me } = useMe();
   return useSWR<TodaysBriefingResponse>(
@@ -2090,7 +2105,15 @@ export function useTodaysBriefing() {
       return (await res.json()) as TodaysBriefingResponse;
     },
     {
-      refreshInterval: 5 * 60 * 1000,
+      refreshInterval: (data) => {
+        if (!data) return 20 * 1000;
+        if (data.ready) return 5 * 60 * 1000;
+        if (data.status === "generating" || data.status === "pending") {
+          return 20 * 1000;
+        }
+        // 'failed' or 'none' — back off to 5 min (won't change today).
+        return 5 * 60 * 1000;
+      },
     },
   );
 }

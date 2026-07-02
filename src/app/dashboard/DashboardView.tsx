@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUser, UserButton } from "@clerk/nextjs";
-import { SWRConfig } from "swr";
+import { SWRConfig, useSWRConfig } from "swr";
 import { HelpMeThinkModal } from "@/app/_components/HelpMeThinkModal";
 import { CalendarTodayView } from "./CalendarTodayView";
 import { CadenceFlagsView } from "./CadenceFlagsView";
@@ -35,7 +35,6 @@ import {
   SECTION_ACCENTS,
 } from "./_primitives";
 import { EmailSlidePanel } from "@/components/dashboard/EmailSlidePanel";
-import { EngagementStreakBadge } from "@/components/dashboard/EngagementStreakBadge";
 import { TodaysSignalHero } from "@/components/TodaysSignalHero";
 import { EveningReflectionBanner } from "@/components/EveningReflectionBanner";
 import { VoiceDigestPlayer } from "@/components/VoiceDigestPlayer";
@@ -252,6 +251,11 @@ function DashboardViewInner() {
   // perceived "nothing happens" was a no-toast / sub-second-spinner UX bug.
   // refreshToast stays visible for 3s after a successful manual sync.
   const [refreshToast, setRefreshToast] = useState<string | null>(null);
+  // Commit 19a.2: "classify all" button state. Mirrors the refresh-inbox
+  // spinner + toast pattern so feedback is symmetric across the two actions.
+  const [isClassifying, setIsClassifying] = useState(false);
+  const [classifyToast, setClassifyToast] = useState<string | null>(null);
+  const { mutate: swrMutate } = useSWRConfig();
   const autoTriggeredRef = useRef(false);
 
   // Onboarding banner state — show if user has generated 0 drafts AND
@@ -357,6 +361,47 @@ function DashboardViewInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me]);
 
+  // Commit 19a.2: manual "classify all" trigger. Mirrors runIngest's
+  // min-spinner pattern (600ms) so quick responses don't feel like a no-op,
+  // then invalidates the email_counts + emails SWR keys (same shape as
+  // useTriggerIngest's tail). Toast clears on the next click.
+  const handleClassifyAll = useCallback(async () => {
+    setIsClassifying(true);
+    setClassifyToast(null);
+    const startedAt = Date.now();
+    try {
+      const res = await fetch("/api/emails/classify-now", { method: "POST" });
+      const data = await res.json();
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < 600) await new Promise((r) => setTimeout(r, 600 - elapsed));
+      if (data.ok) {
+        setClassifyToast(
+          `Synced — ${data.classified} classified${data.failed > 0 ? `, ${data.failed} failed` : ""}.`,
+        );
+        // Same key-prefix invalidation useTriggerIngest does (line ~1512 of
+        // src/lib/supabase/hooks.ts). Touches every useEmails + useCounts
+        // SWR entry so the dashboard re-renders with the fresh
+        // classifications.
+        await swrMutate(
+          (key) =>
+            Array.isArray(key) &&
+            (key[0] === "emails" || key[0] === "email_counts"),
+        );
+        // Auto-clear the success toast after 3s to match refreshToast UX.
+        // Failure toasts linger so the user sees the error.
+        window.setTimeout(() => setClassifyToast(null), 3000);
+      } else {
+        setClassifyToast(`Failed: ${data.error ?? "unknown"}`);
+      }
+    } catch (err) {
+      setClassifyToast(
+        `Failed: ${err instanceof Error ? err.message : "network"}`,
+      );
+    } finally {
+      setIsClassifying(false);
+    }
+  }, [swrMutate]);
+
   const firstName = clerkUser?.firstName ?? clerkUser?.fullName ?? "there";
 
   if (!isLoaded) {
@@ -428,7 +473,6 @@ function DashboardViewInner() {
           >
             {isIngesting ? "refreshing..." : "refresh inbox"}
           </button>
-          <EngagementStreakBadge />
           <UserButton>
             <UserButton.MenuItems>
               <UserButton.Link
@@ -537,42 +581,22 @@ function DashboardViewInner() {
           <p className="mt-3 text-[13px] text-[var(--chip-green-fg)]">{refreshToast}</p>
         )}
 
-        {/* Pastel-gradient stat hero cards. Labels stay UPPERCASE letter-
-            spaced — these are tracked micro-labels, not UI text in the
-            lowercase rule's scope. Values use tabular-nums for digit
-            alignment across the two cards. */}
-        <div className="mt-6 grid grid-cols-2 gap-4">
-          <div
-            className="flex min-h-[120px] flex-col justify-between rounded-[10px] p-6"
-            style={{ background: "var(--cred-grad-peach)" }}
-          >
-            <span className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-[#6b4423] opacity-80">
-              emails ingested
-            </span>
-            <span className="text-[44px] font-light leading-none tracking-[-0.04em] tabular-nums text-[var(--cred-text-primary)]">
-              {counts?.total ?? "—"}
-            </span>
-          </div>
-          <div
-            className="flex min-h-[120px] flex-col justify-between rounded-[10px] p-6"
-            style={{ background: "var(--cred-grad-mint)" }}
-          >
-            <span className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-[#2b6a40] opacity-80">
-              last sync
-            </span>
-            <span className="text-[44px] font-light leading-none tracking-[-0.04em] tabular-nums text-[var(--cred-text-primary)]">
-              {formatRelativeTime(me?.lastIngestedAt)}
-            </span>
-          </div>
-        </div>
+        {classifyToast && (
+          <p className="mt-3 text-[13px] text-[var(--cred-text-secondary)]">{classifyToast}</p>
+        )}
 
-        <div className="mt-6 mb-8">
+        {/* Compact status + classify-all action. Replaces the v1 pastel cards
+            per Ajit feedback #5 — counts demoted to metadata. */}
+        <div className="mt-6 mb-8 flex items-center justify-between">
+          <p className="cred-ui-lower text-[12px] text-[var(--cred-text-meta)]">
+            {counts?.total ?? "—"} emails · last sync {formatRelativeTime(me?.lastIngestedAt)}
+          </p>
           <button
-            disabled
-            title="Available next session"
+            onClick={handleClassifyAll}
+            disabled={isClassifying}
             className="cred-ui-lower rounded-[4px] border border-[var(--cred-border)] bg-[var(--cred-card-bg)] px-3 py-1.5 text-[13px] font-medium tracking-[0.01em] text-[var(--cred-text-primary)] hover:bg-[var(--cred-border-soft)]/40 disabled:opacity-50"
           >
-            classify all
+            {isClassifying ? "classifying…" : "classify all"}
           </button>
         </div>
       </section>

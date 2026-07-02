@@ -44,9 +44,15 @@ import { makeSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-// 90 days in ms — lookback window for source scans.
+// 90 days in ms — lookback window for source scans (slack + calendar).
 const LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
-// 30 days in ms — recent-interactions counter window.
+// 180 days in ms — email-only lookback. Wider window because cadence-break
+// inclusion rule (Commit 19a.2 item 5) needs ≥1 sent in 180d to qualify a
+// contact for the cadence-break surface. Slack/calendar stay on 90d
+// (LOOKBACK_MS) to keep blast radius minimal.
+const EMAIL_LOOKBACK_MS = 180 * 24 * 60 * 60 * 1000;
+// 30 days in ms — recent-interactions counter window (also "received in
+// last 30d" for cadence inclusion clause B).
 const RECENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 // 14 days in ms — future calendar lookahead.
 const FUTURE_CALENDAR_MS = 14 * 24 * 60 * 60 * 1000;
@@ -85,6 +91,12 @@ type Aggregate = {
   lastSeenSource: "email" | "slack" | "calendar";
   totalLifetime: number;
   total30d: number;
+  // Commit 19a.2 item 5 — split email counts to drive cadence-break
+  // inclusion rule. sentCount180d = user→them; receivedCount30d = them→user.
+  // Slack/calendar do NOT contribute to either counter (we don't have a
+  // clean direction signal there yet).
+  sentCount180d: number;
+  receivedCount30d: number;
   // alternates seen
   altEmails: Set<string>;
   altSlackIds: Set<string>;
@@ -172,6 +184,34 @@ function isBotSender(email: string | null): boolean {
   return false;
 }
 
+// Display-name regex per Ajit's 19a.2 spec. Catches role-account display
+// names (e.g. "XYZ Care Team", "Support at Acme") that frequently show up
+// as cadence-break false positives. Word-boundary anchored to avoid matching
+// inside legit company names ("Updateful Solutions" stays in).
+// Note: Ajit's spec wrote this as `[team|support|...]` — character-class
+// syntax which would match any single letter from the set; we render it as
+// proper alternation here.
+const BOT_DISPLAY_NAME_REGEX =
+  /\b(team|support|service|notifications?|alerts?|info|hello|care|help|noreply|account|billing|invoice|order|shipping|tracking|update)\b/i;
+
+function isBotDisplayName(name: string | null): boolean {
+  if (!name) return false;
+  return BOT_DISPLAY_NAME_REGEX.test(name);
+}
+
+// Domain-suffix-only check (reusable form lifted from isBotSender). Used by
+// the cadence-break inclusion rule so we can apply the suffix gate without
+// also tripping the local-pattern gate (display-name regex handles the
+// role-account case separately).
+function emailMatchesBotDomain(email: string | null): boolean {
+  if (!email) return false;
+  const lower = email.toLowerCase();
+  for (const suf of BOT_DOMAIN_SUFFIXES) {
+    if (lower.endsWith(suf)) return true;
+  }
+  return false;
+}
+
 // Pull a display-name candidate string out of a value that might be null
 // or empty. Trims whitespace; returns null when nothing usable.
 function cleanName(s: string | null | undefined): string | null {
@@ -198,6 +238,8 @@ function getOrCreateAggregate(
     lastSeenSource: seed.lastSeenSource ?? "email",
     totalLifetime: 0,
     total30d: 0,
+    sentCount180d: 0,
+    receivedCount30d: 0,
     altEmails: new Set<string>(),
     altSlackIds: new Set<string>(),
   };
@@ -207,6 +249,11 @@ function getOrCreateAggregate(
 
 // Record one interaction against an aggregate. Updates first/last seen,
 // counters, and display-name (when a higher-ranked name appears).
+//
+// `direction` is email-only:
+//   "in"  → them → user (increments receivedCount30d when in window)
+//   "out" → user → them (increments sentCount180d when in window)
+//   null  → slack/calendar; no sent/received split contribution
 function recordInteraction(
   a: Aggregate,
   tsMs: number,
@@ -214,6 +261,7 @@ function recordInteraction(
   nameCandidate: string | null,
   nameRank: number,
   nowMs: number,
+  direction: "in" | "out" | null = null,
 ): void {
   if (!Number.isFinite(tsMs)) return;
   if (tsMs < a.firstSeenMs) a.firstSeenMs = tsMs;
@@ -223,6 +271,11 @@ function recordInteraction(
   }
   a.totalLifetime += 1;
   if (tsMs >= nowMs - RECENT_WINDOW_MS) a.total30d += 1;
+  if (direction === "in" && tsMs >= nowMs - RECENT_WINDOW_MS) {
+    a.receivedCount30d += 1;
+  } else if (direction === "out" && tsMs >= nowMs - 180 * 86400000) {
+    a.sentCount180d += 1;
+  }
   if (nameCandidate && nameRank > a.displayNameRank) {
     a.displayName = nameCandidate;
     a.displayNameRank = nameRank;
@@ -279,6 +332,9 @@ export async function POST(req: NextRequest) {
   let contactsUpserted = 0;
 
   const sinceMs = nowMs - LOOKBACK_MS;
+  // Email-only wider lookback so we can count sent-in-180d for the
+  // cadence-break inclusion rule. Slack/calendar keep their 90d window.
+  const sinceEmailMs = nowMs - EMAIL_LOOKBACK_MS;
   const futureCalendarIso = new Date(nowMs + FUTURE_CALENDAR_MS).toISOString();
   const sinceCalendarIso = new Date(sinceMs).toISOString();
 
@@ -291,11 +347,13 @@ export async function POST(req: NextRequest) {
       const userEmailLower = user.email ? user.email.trim().toLowerCase() : null;
 
       // --- 1. emails ----------------------------------------------------
+      // 180-day lookback (sinceEmailMs) so the sent-in-180d clause of the
+      // cadence-break inclusion rule has the right denominator.
       const { data: emailRows, error: emailErr } = await supabase
         .from("emails")
         .select("from_address, to_addresses, received_at")
         .eq("user_id", user.id)
-        .gte("received_at", sinceMs);
+        .gte("received_at", sinceEmailMs);
       if (emailErr) {
         console.warn("[aggregate-contacts:emails] select failed, skipping user", {
           userId: user.id,
@@ -315,7 +373,15 @@ export async function POST(req: NextRequest) {
           !isBotSender(fromEmail)
         ) {
           const a = getOrCreateAggregate(agg, fromEmail, { email: fromEmail });
-          recordInteraction(a, tsMs, "email", cleanName(fromName), 3, nowMs);
+          recordInteraction(
+            a,
+            tsMs,
+            "email",
+            cleanName(fromName),
+            3,
+            nowMs,
+            "in",
+          );
         }
         // Outbound: each to_addresses[] entry → who the user emailed
         const toList = Array.isArray(e.to_addresses) ? e.to_addresses : [];
@@ -326,7 +392,7 @@ export async function POST(req: NextRequest) {
           if (fromEmail && toEmail === fromEmail) continue; // already counted as inbound
           if (isBotSender(toEmail)) continue; // skip outbound to bot addresses too
           const a = getOrCreateAggregate(agg, toEmail, { email: toEmail });
-          recordInteraction(a, tsMs, "email", null, 0, nowMs);
+          recordInteraction(a, tsMs, "email", null, 0, nowMs, "out");
         }
       }
 
@@ -410,8 +476,20 @@ export async function POST(req: NextRequest) {
         const lastSeenAtIso = new Date(a.lastSeenMs).toISOString();
         const firstSeenAtIso = new Date(a.firstSeenMs).toISOString();
         const daysSince = Math.floor((nowMs - a.lastSeenMs) / 86400000);
+        // Commit 19a.2 item 5 — refined cadence inclusion rule. Include only
+        // when EITHER (A) ≥1 sent in 180d (real two-way contact), OR
+        // (B) ≥2 received in 30d AND not a role-account display name AND
+        //     not a known bot domain (helps surface unread real humans
+        //     without dumping every newsletter into the cadence surface).
+        const meetsCadenceInclusion =
+          a.sentCount180d >= 1 ||
+          (a.receivedCount30d >= 2 &&
+            !isBotDisplayName(a.displayName) &&
+            !emailMatchesBotDomain(a.email));
         const cadenceBreak =
-          daysSince > CADENCE_BREAK_THRESHOLD_DAYS ? daysSince : null;
+          daysSince > CADENCE_BREAK_THRESHOLD_DAYS && meetsCadenceInclusion
+            ? daysSince
+            : null;
 
         // Aggregate columns ONLY — manual_notes / manual_tags / archived
         // are intentionally OMITTED so user edits survive the rebuild.

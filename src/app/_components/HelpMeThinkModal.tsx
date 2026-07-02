@@ -440,7 +440,16 @@ function ChatRoute({
     const res = await turn(nextTranscript);
     setThinking(false);
     if (!res.ok || !res.assistantMessage) {
-      setError(res.error ?? "chat_failed");
+      // Prefer the server-provided conversational message
+      // (errorCodes: llm_quota / llm_timeout / llm_failed all carry one).
+      // Special-case validation rejection too so the user knows the
+      // transcript is the issue, not the model.
+      const friendly =
+        res.userMessage ??
+        (res.error === "transcript_too_long"
+          ? "this conversation has run its course — start fresh?"
+          : "hmm, that didn't land. try rephrasing or hit reset.");
+      setError(friendly);
       // Roll back the user message so they can retry without losing input.
       setTranscript(transcript);
       setInput(userMsg.content);

@@ -333,6 +333,67 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // --- Welcome briefing (waitUntil) -----------------------------------------
+  // Fires only on the user's very first ingest. Detect "first time" via
+  // zero audio_briefings rows. The cron route at /api/cron/generate-briefing
+  // accepts ?force=1&user=<id> (Commit 19a.2 Item 6) to bypass the local-
+  // 6am gate so the welcome briefing renders right when the new user lands
+  // on /dashboard. Same waitUntil + Bearer CRON_SECRET pattern as the
+  // voice-init trigger above.
+  try {
+    const { count: briefingCount, error: briefingErr } = await supabase
+      .from("audio_briefings")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", supabaseUserId);
+    if (briefingErr) throw briefingErr;
+    if ((briefingCount ?? 0) === 0) {
+      const cronSecret = process.env.CRON_SECRET;
+      const baseUrl = resolveBaseUrl(req);
+      if (cronSecret && baseUrl) {
+        waitUntil(
+          fetch(
+            `${baseUrl}/api/cron/generate-briefing?force=1&user=${encodeURIComponent(supabaseUserId)}`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${cronSecret}`,
+              },
+            },
+          )
+            .then(async (res) => {
+              if (!res.ok) {
+                console.error("[ingestEmails:welcome-briefing] non-200", {
+                  userId: supabaseUserId,
+                  status: res.status,
+                });
+              } else {
+                console.log("[ingestEmails:welcome-briefing] dispatched", {
+                  userId: supabaseUserId,
+                });
+              }
+            })
+            .catch((err) => {
+              console.error("[ingestEmails:welcome-briefing] fetch threw", {
+                userId: supabaseUserId,
+                message: err instanceof Error ? err.message : String(err),
+              });
+            }),
+        );
+      } else {
+        console.warn("[ingestEmails:welcome-briefing] skipped", {
+          userId: supabaseUserId,
+          reason: !cronSecret ? "no_cron_secret" : "no_base_url",
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[ingestEmails:welcome-briefing-check] failed", {
+      userId: supabaseUserId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   console.log("[ingestEmails:done] success", {
     userId: supabaseUserId,
     fullInserted,

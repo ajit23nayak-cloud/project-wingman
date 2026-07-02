@@ -16,6 +16,23 @@ import { synthesizeSpeech } from "@/lib/google/tts";
 //
 // Per-user try/catch — one failure doesn't poison the batch. Skips users
 // who already have a ready briefing for today (unique constraint dedupe).
+//
+// Manual force trigger (Commit 19a.2):
+//   ?force=1&user=<userId>            — bypasses the local-6am gate; only
+//                                       processes that one user (must be
+//                                       active in the last 7 days). Returns
+//                                       404 with user_not_eligible_or_not_
+//                                       active_7d if the user isn't found.
+//   ?force=1&user=<id>&regenerate=1   — additionally bypasses the "skip if
+//                                       status=ready" guard. Stamps the
+//                                       existing row back to 'generating'
+//                                       and re-runs the full pipeline.
+//                                       Used for the welcome-briefing
+//                                       onboarding flow and Ajit's manual
+//                                       testing.
+//   ?force=1 (no user param)          — 400 force_requires_user_param.
+// Auth (Bearer CRON_SECRET) is always required; force mode does not
+// loosen authentication.
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -56,6 +73,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  const url = new URL(req.url);
+  const force = url.searchParams.get("force") === "1";
+  const userParam = url.searchParams.get("user");
+  // regenerate is only meaningful when force=1 — outside force mode, the
+  // cron schedule is authoritative and shouldn't be bypassed by a query flag.
+  const regenerate = force && url.searchParams.get("regenerate") === "1";
+
+  if (force && !userParam) {
+    return NextResponse.json(
+      { error: "force_requires_user_param" },
+      { status: 400 },
+    );
+  }
+
   const supabase = makeSupabaseServerClient();
   const startedAt = Date.now();
 
@@ -74,9 +105,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "users_select_failed" });
   }
 
-  const eligible: EligibleUser[] = ((users ?? []) as EligibleUser[]).filter(
-    (u) => localHourFor(u.timezone) === 6,
-  );
+  const eligible: EligibleUser[] = force
+    ? ((users ?? []) as EligibleUser[]).filter((u) => u.id === userParam)
+    : ((users ?? []) as EligibleUser[]).filter(
+        (u) => localHourFor(u.timezone) === 6,
+      );
+
+  if (force && eligible.length === 0) {
+    return NextResponse.json(
+      { ok: false, error: "user_not_eligible_or_not_active_7d" },
+      { status: 404 },
+    );
+  }
 
   let generated = 0;
   let skipped = 0;
@@ -93,7 +133,11 @@ export async function POST(req: NextRequest) {
         .eq("user_id", user.id)
         .eq("briefing_date", today)
         .maybeSingle();
-      if (existing && (existing as { status: string }).status === "ready") {
+      if (
+        existing &&
+        (existing as { status: string }).status === "ready" &&
+        !regenerate
+      ) {
         skipped += 1;
         continue;
       }

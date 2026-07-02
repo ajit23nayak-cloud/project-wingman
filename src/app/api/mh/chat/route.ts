@@ -48,6 +48,37 @@ function llmOutputIsEscalation(text: string): boolean {
   return text.toLowerCase().includes(ESCALATION_OPENING);
 }
 
+// App-level retry wrapper for the Gemini generateText call. We keep the
+// SDK-level maxRetries at 0 (see LLM_MAX_RETRIES) so this stays the only
+// retry control plane. Backoff: 800ms, 1.6s — total worst case ~2.4s
+// before user sees an error, well inside the chat UX patience window.
+//
+// Only retry on transient signals (network blip / 5xx / quota) — validation
+// or model-format errors get surfaced immediately so the user can rephrase.
+async function generateTextWithRetry(
+  args: Parameters<typeof generateText>[0],
+  maxRetries = 2,
+) {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await generateText(args);
+    } catch (err) {
+      lastErr = err;
+      const message = err instanceof Error ? err.message : String(err);
+      // Don't retry on validation-style errors — only transient network/quota.
+      const transient =
+        /timeout|fetch|network|ECONN|5\d\d|429|UNAVAILABLE|RESOURCE_EXHAUSTED/i.test(
+          message,
+        );
+      if (!transient || attempt === maxRetries) throw err;
+      // Exponential backoff: 800ms, 1.6s
+      await new Promise((r) => setTimeout(r, 800 * Math.pow(2, attempt)));
+    }
+  }
+  throw lastErr;
+}
+
 export async function POST(req: NextRequest) {
   const result = await resolveUser(req);
   if (!result.ok) return result.response;
@@ -157,7 +188,7 @@ export async function POST(req: NextRequest) {
   const systemPrompt = buildChatSystemPrompt(mhStyle, region);
 
   try {
-    const { text } = await generateText({
+    const { text } = await generateTextWithRetry({
       model: getGeminiModel(),
       system: systemPrompt,
       messages: transcript.map((m) => ({
@@ -197,12 +228,31 @@ export async function POST(req: NextRequest) {
         : { triggered: false },
     });
   } catch (err) {
-    console.error("[mh/chat] LLM call failed", {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[mh/chat] LLM call failed after retries", {
       supabaseUserId,
-      message: err instanceof Error ? err.message : String(err),
+      message,
     });
+    // Classify the error for the client so the UI can render a useful message
+    // instead of the generic "llm_failed". v0 categories:
+    //   - llm_quota: 429 / RESOURCE_EXHAUSTED — Gemini rate-limit / quota
+    //   - llm_timeout: timeout / ECONNRESET / fetch failed
+    //   - llm_failed: everything else (genuine model error, parse failure)
+    const errorCode =
+      /429|RESOURCE_EXHAUSTED|quota/i.test(message)
+        ? "llm_quota"
+        : /timeout|ECONN|fetch|network/i.test(message)
+          ? "llm_timeout"
+          : "llm_failed";
+    // Conversational fallback for the client to render directly.
+    const userMessage =
+      errorCode === "llm_quota"
+        ? "we're getting a lot of traffic right now — try again in a minute."
+        : errorCode === "llm_timeout"
+          ? "that took longer than expected — try once more."
+          : "hmm, that didn't land. try rephrasing or hit reset.";
     return NextResponse.json(
-      { ok: false, error: "llm_failed" },
+      { ok: false, error: errorCode, userMessage },
       { status: 502 },
     );
   }
