@@ -10,7 +10,7 @@ Working title. Built solo.
 - **Slack ingestion.** Pulls channel history on a cron and finds commitments, things you said you would do and things others said they would do.
 - **Daily signal, evening reflection, weekly digest.** A cadence that runs itself.
 - **Audio briefing.** A text-to-speech digest for when reading is the wrong format.
-- **Decisions log and contact memory.** Context that compounds instead of resetting every session.
+- **Decisions log and contact memory.** Context that compounds across sessions.
 
 ## Stack
 
@@ -39,7 +39,7 @@ The protocol is in `coordination/log.md` if you want to copy it.
 
 ## Status
 
-v0, built to real integrations rather than mocks. Google OAuth flow implemented for Gmail, Slack OAuth for channel ingestion.
+v0, built against real integrations, no mocks. Google OAuth flow implemented for Gmail, Slack OAuth for channel ingestion.
 
 ## Author
 
