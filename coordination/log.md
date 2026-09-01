@@ -8152,3 +8152,9 @@ Presentation pass. The two-agent protocol was only discoverable by opening `coor
 Content is descriptive of what already exists. No behaviour changed, no code touched.
 
 Counts cited in the new file, verified today: 99 log entries, 8,146 lines, 102 `@AJIT` escalations, 80 commits.
+
+## [2026-09-01 09:09 UTC | Tab 2] Homepage snapshot added to README
+
+Captured the live landing page at project-wingman-pi.vercel.app and committed it to `docs/wingman-home.jpg`, referenced at the top of README with the live link beside it. Docs only, no code touched.
+
+Same pass applied to the other two public repos (super-coach, glowup-room).
