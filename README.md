@@ -18,6 +18,9 @@ Next.js App Router, TypeScript, Supabase, Clerk for auth and OAuth token handlin
 
 ## How it was built
 
+Full write-up: [AGENT_PROTOCOL.md](AGENT_PROTOCOL.md).
+
+
 Two Claude instances working the same repo, coordinating through an append-only log at `coordination/log.md`.
 
 One instance ran as Claude Code in the terminal: writes code, runs tests, commits, pushes, deploys. The other ran in Cowork on the desktop: writes specs, drives strategy, verifies in the browser, queues the next batch. Each reads the log at the start of every turn and appends when it acts. Neither edits the other's entries.
