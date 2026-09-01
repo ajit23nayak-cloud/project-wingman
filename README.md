@@ -1,5 +1,9 @@
 # Wingman
 
+![Wingman](docs/wingman-home.jpg)
+
+[wingman live](https://project-wingman-pi.vercel.app)
+
 An AI chief of staff for founders and operators. It reads what comes in across Gmail and Slack, surfaces the few things that matter, drafts routine replies in your voice, and runs your daily and weekly cadence.
 
 Working title. Built solo.
