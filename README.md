@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Wingman
 
-## Getting Started
+An AI chief of staff for founders and operators. It reads what comes in across Gmail and Slack, surfaces the few things that matter, drafts routine replies in your voice, and runs your daily and weekly cadence.
 
-First, run the development server:
+Working title. Built solo.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## What it does
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **Inbox triage.** Classifies incoming Gmail and drafts replies in the user's voice.
+- **Slack ingestion.** Pulls channel history on a cron and finds commitments, things you said you would do and things others said they would do.
+- **Daily signal, evening reflection, weekly digest.** A cadence that runs itself.
+- **Audio briefing.** A text-to-speech digest for when reading is the wrong format.
+- **Decisions log and contact memory.** Context that compounds instead of resetting every session.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Stack
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Next.js App Router, TypeScript, Supabase, Clerk for auth and OAuth token handling, Vercel. Cron jobs for ingestion.
 
-## Learn More
+## How it was built
 
-To learn more about Next.js, take a look at the following resources:
+Two Claude instances working the same repo, coordinating through an append-only log at `coordination/log.md`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+One instance ran as Claude Code in the terminal: writes code, runs tests, commits, pushes, deploys. The other ran in Cowork on the desktop: writes specs, drives strategy, verifies in the browser, queues the next batch. Each reads the log at the start of every turn and appends when it acts. Neither edits the other's entries.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+When either one needs a human, it ends its entry with `@AJIT:` and stops. That is the whole escalation protocol. My job most days was typing `check log` in each window.
 
-## Deploy on Vercel
+The protocol is in `coordination/log.md` if you want to copy it.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Repo map
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| File | What it holds |
+|---|---|
+| `CONVENTIONS.md` | Coding and integration rules both agents follow |
+| `ROADMAP.md` | Product versions and scope |
+| `MH_UI_SPEC.md` | Interface spec |
+| `OAUTH_VERIFICATION.md` | Google OAuth verification working notes |
+| `PRIVACY_POLICY.md` | Written for real users, in plain language |
+| `coordination/log.md` | The two-agent message bus |
+
+## Status
+
+v0, built to real integrations rather than mocks. Google OAuth flow implemented for Gmail, Slack OAuth for channel ingestion.
+
+## Author
+
+Ajit Nayak. [linkedin.com/in/ajit-nayak](https://linkedin.com/in/ajit-nayak)
