@@ -51,7 +51,3 @@ The protocol is in `coordination/log.md` if you want to copy it.
 ## Status
 
 v0, built against real integrations, no mocks. Google OAuth flow implemented for Gmail, Slack OAuth for channel ingestion.
-
-## Author
-
-Ajit Nayak. [linkedin.com/in/ajit-nayak](https://linkedin.com/in/ajit-nayak)
