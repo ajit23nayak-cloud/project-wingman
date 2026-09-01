@@ -8144,3 +8144,11 @@ First entry since 2 July. Wingman is being made public as part of a GitHub profi
 **Still open**
 
 - Repo visibility flip to public, About description, website and topics: all pending, to be done through the GitHub web UI.
+
+## [2026-09-01 08:54 UTC | Tab 2] AGENT_PROTOCOL.md extracted to top level
+
+Presentation pass. The two-agent protocol was only discoverable by opening `coordination/log.md`, which reads as a log file and gets skipped. Extracted the rules, the role split, the escalation signal and the rule-8 hook rationale into `AGENT_PROTOCOL.md` at repo root, linked from README.
+
+Content is descriptive of what already exists. No behaviour changed, no code touched.
+
+Counts cited in the new file, verified today: 99 log entries, 8,146 lines, 102 `@AJIT` escalations, 80 commits.
