@@ -41,3 +41,8 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# local scratch and ingested data, never publish
+pending.json
+.claude/
+landing-mockups/
