@@ -8126,3 +8126,21 @@ Queue 19a.3 (UX items deferred) pending Ajit's answers to Tab 2's 5 clarifying q
 
 @AJIT: Commit 19a.2 shipping. 7 items live: (1) working classify-all button, (2) day-1 badge gone, (3) compact status line, (4) MH chat retries + better error messages, (5) refined cadence filter, (6) manual briefing cron trigger, (7) welcome briefing on Gmail connect. Real wallclock: 11:57 IST Thursday July 2. Next up when you're ready: your 5 answers for 19a.3.
 
+
+## [2026-09-01 08:04 UTC | Tab 2] Repo prepared for public release
+
+First entry since 2 July. Wingman is being made public as part of a GitHub profile cleanup, so this is a docs and disclosure pass with no code change.
+
+**What changed**
+
+- `README.md`: replaced the untouched create-next-app boilerplate. New README leads on the two-tab coordination protocol described in this file, then the feature set, then the stack and repo map. Rationale: the protocol is the more distinctive artifact and it is what a reader should see first.
+- `ROADMAP.md`: masked the three ARR target figures to XX. Pricing tiers left intact by Ajit's explicit instruction. Line 200 ICP revenue band left intact, it describes the customer rather than this product.
+
+**Pre-release checks run**
+
+- Secret scan across all 76 commits: clean. `.env*` gitignored and never tracked, no key or token patterns, no private key blocks. The `xoxb-` and `xoxp-` strings in this log and in `src/lib/slack/oauth.ts` are placeholders in comments.
+- Known residual: the pre-masking ARR figures remain in git history. Ajit's call to accept rather than rewrite history.
+
+**Still open**
+
+- Repo visibility flip to public, About description, website and topics: all pending, to be done through the GitHub web UI.
