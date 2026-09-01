@@ -8176,3 +8176,7 @@ Review caught two things.
 1. The README repo map linked `MH_UI_SPEC.md`, `OAUTH_VERIFICATION.md` and `PRIVACY_POLICY.md`. All three existed on disk but were untracked, so those links 404'd on the public repo. Now tracked, along with `OAUTH_SUBMISSION_CHEATSHEET.md` and `sprint-strategy.md`. Secret-scanned first: clean.
 
 2. `pending.json` holds ingested email records with real `fromAddress` values. Untracked, and now gitignored so a future `git add -A` cannot publish it. Same for `.claude/` and `landing-mockups/`.
+
+## [2026-09-01 09:29 UTC | Tab 2] Author section removed from README
+
+Ajit's call: a LinkedIn link on every repo adds nothing when the profile already carries it.
