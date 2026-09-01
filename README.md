@@ -1,8 +1,10 @@
 # Wingman
 
-![Wingman](docs/wingman-home.jpg)
+![The Wingman dashboard](docs/dashboard.png)
 
-[wingman live](https://project-wingman-pi.vercel.app)
+One screen each morning. What needs you, what came in on Slack and email, the decision still open, today's calendar, and where the quarter actually stands. The audio briefing at the top is the same thing for when reading is the wrong format.
+
+[project-wingman-pi.vercel.app](https://project-wingman-pi.vercel.app)
 
 An AI chief of staff for founders and operators. It reads what comes in across Gmail and Slack, surfaces the few things that matter, drafts routine replies in your voice, and runs your daily and weekly cadence.
 
@@ -15,6 +17,8 @@ Working title. Built solo.
 - **Daily signal, evening reflection, weekly digest.** A cadence that runs itself.
 - **Audio briefing.** A text-to-speech digest for when reading is the wrong format.
 - **Decisions log and contact memory.** Context that compounds across sessions.
+
+![Wingman feature set](docs/features.png)
 
 ## Stack
 
