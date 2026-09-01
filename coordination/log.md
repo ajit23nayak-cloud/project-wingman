@@ -8158,3 +8158,13 @@ Counts cited in the new file, verified today: 99 log entries, 8,146 lines, 102 `
 Captured the live landing page at project-wingman-pi.vercel.app and committed it to `docs/wingman-home.jpg`, referenced at the top of README with the live link beside it. Docs only, no code touched.
 
 Same pass applied to the other two public repos (super-coach, glowup-room).
+
+## [2026-09-01 09:18 UTC | Tab 2] README images replaced on Ajit's feedback
+
+The landing-page hero shot I committed earlier was rejected: generic, interchangeable with any SaaS site, showed no product. Replaced with two screens Ajit supplied.
+
+- `docs/dashboard.png` at the top: the actual morning dashboard, needs-you queue, Slack, open decision, calendar, OKR status, audio briefing.
+- `docs/features.png` under "What it does": the eight-capability grid.
+- Removed `docs/wingman-home.jpg`.
+
+Rule for future image picks: show the product doing its job, never the page selling it.
